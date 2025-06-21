@@ -2,6 +2,7 @@ __pycache__/
 pictures/
 .vscode/
 Learn 2D-Segmentation.ipynb
+sam_vit_b_01ec64.pth
 
 # === OS files ===
 .DS_Store
