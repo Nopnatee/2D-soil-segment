@@ -2,3 +2,118 @@ __pycache__/
 pictures/
 .vscode/
 Learn 2D-Segmentation.ipynb
+
+# === OS files ===
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# === VS Code ===
+.vscode/
+.history/
+
+# === Logs and temp files ===
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*.backup
+
+# === Compiled binaries ===
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.pyc
+*.pyo
+*.class
+*.jar
+*.out
+
+# === Package manager folders ===
+node_modules/
+bower_components/
+vendor/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# === Java ===
+*.class
+*.jar
+*.war
+*.ear
+*.iml
+target/
+build/
+
+# === C/C++ ===
+*.exe
+*.out
+*.obj
+*.o
+*.a
+*.so
+*.dll
+
+# === Jupyter Notebooks checkpoints ===
+.ipynb_checkpoints/
+
+# === JetBrains IDEs (like PyCharm, IntelliJ) ===
+.idea/
+*.iml
+
+# === Mac and Linux trash ===
+.Trash-*
+.nfs*
+
+# === Windows trash ===
+$RECYCLE.BIN/
+
+# === Backup files ===
+*.bak
+*.old
+*.orig
+*.tmp
+*~  
+
+# === Gradio Cache / Web Apps (if applicable) ===
+gradio_cached_examples/
+
+# === Environment Variables or Secrets ===
+.env
+.env.local
+.env.*
+
+# === Test/coverage output ===
+coverage/
+*.cover
+*.lcov
+*.gcov
+*.gcda
+*.gcno
+.nyc_output/
+
+# === Misc ===
+*.sqlite
+*.db
+*.pid
+*.pid.lock
+*.pem
+*.key
+*.crt
+
+# === VS Code Settings sync extensions (optional) ===
+.code-workspace
