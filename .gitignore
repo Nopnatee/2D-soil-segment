@@ -3,6 +3,7 @@ pictures/
 .vscode/
 Learn 2D-Segmentation.ipynb
 *.pth
+*.jpg
 
 # === OS files ===
 .DS_Store
