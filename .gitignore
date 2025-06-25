@@ -119,3 +119,4 @@ coverage/
 
 # === VS Code Settings sync extensions (optional) ===
 .code-workspace
+/FastSAM/
