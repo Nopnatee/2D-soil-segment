@@ -33,7 +33,35 @@ def get_npk_and_images(folder, number, npk_grid_data, shadow_area):
     except Exception as e:
         error_msg = f"Error processing image: {str(e)}"
         # Return error message and None images
-        return error_msg, None, None
+        return error_msg, None
+
+
+# New function for direct file upload
+def get_npk_from_uploaded_file(uploaded_file, npk_grid_data, shadow_area):
+    """Enhanced wrapper function to get NPK from uploaded image file"""
+    try:
+        if uploaded_file is None:
+            return "Please upload an image file first.", None
+        
+        # Extract NPK compositions from the dataframe
+        w_comp = {'N': npk_grid_data.iloc[0, 1], 'P': npk_grid_data.iloc[0, 2], 'K': npk_grid_data.iloc[0, 3]}
+        r_comp = {'N': npk_grid_data.iloc[1, 1], 'P': npk_grid_data.iloc[1, 2], 'K': npk_grid_data.iloc[1, 3]}
+        s_comp = {'N': npk_grid_data.iloc[2, 1], 'P': npk_grid_data.iloc[2, 2], 'K': npk_grid_data.iloc[2, 3]}
+        b_comp = {'N': npk_grid_data.iloc[3, 1], 'P': npk_grid_data.iloc[3, 2], 'K': npk_grid_data.iloc[3, 3]}
+
+        # Get NPK result using the uploaded file path
+        npk_result = get_npk(uploaded_file, w_comp, r_comp, s_comp, b_comp, shadow_area)
+        
+        # Load and return the uploaded image
+        uploaded_image = load_img_as_rgb(uploaded_file)
+        
+        return npk_result, uploaded_image
+        
+    except Exception as e:
+        error_msg = f"Error processing uploaded image: {str(e)}"
+        # Return error message and None image
+        return error_msg, None
+
 
 # Create Gradio Interface
 def create_app():
@@ -111,7 +139,7 @@ def create_app():
                 analyze_btn1.click(
                     fn=lambda: (gr.update(value="🔄 **Analyzing...**", visible=True), 
                                gr.update(interactive=False), 
-                               "", None, None),
+                               "", None),
                     outputs=[loading_status1, analyze_btn1, output1, initial_image_output]
                 ).then(
                     fn=get_npk_and_images,
@@ -122,9 +150,65 @@ def create_app():
                     outputs=[loading_status1, analyze_btn1]
                 )
             
-            # Tab 2: Chapter 2 - I-Messages and Emotion Reflection
-            with gr.TabItem("Under Construction"):
-                gr.Markdown("### Under Construction")
+            # Tab 2: Upload Image Directly
+            with gr.TabItem("Upload Image Directly"):
+                gr.Markdown("""Upload your own image file (.jpg, .png) to analyze its NPK composition directly.""")
+                
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("**Upload Image**")
+                        uploaded_file = gr.File(
+                            label="Select Image File (.jpg, .jpeg, .png)",
+                            file_types=[".jpg", ".jpeg", ".png"],
+                            file_count="single"
+                        )
+                        gr.Markdown("*Upload a .jpg or .png image of fertilizer beads for analysis.*")
+                        gr.Markdown("**Bead NPK Compositions (N, P, K)**")
+                        npk_grid_data2 = gr.Dataframe(
+                            label="NPK Composition",
+                            headers=["Color", "N", "P", "K"],
+                            datatype=["str","number", "number", "number"],
+                            row_count=4,
+                            col_count=4,
+                            value=[
+                                ["White", 46, 0, 0],   # White
+                                ["Red", 0, 0, 60],   # Red
+                                ["Stain", 21, 0, 0],   # Stain
+                                ["Black", 18, 46, 0]   # Black
+                            ],
+                            interactive=True
+                        )
+                        gr.Markdown("**Shadow Area**")
+                        shadow_area2 = gr.Number(label="Shadow Area", value=200000, precision=2,
+                                               info="Area of the shadow in pixels, used to exclude it from NPK calculations.")
+                        with gr.Row():
+                            analyze_btn2 = gr.Button("🔍 Analyze N-P-K Composition", variant="primary")
+                    
+                    with gr.Column():
+                        loading_status2 = gr.Markdown("", visible=False)
+                        gr.Markdown("**Uploaded Image**")
+                        uploaded_image_output = gr.Image(
+                            label="Uploaded Picture",
+                            type="numpy",
+                            interactive=False,
+                            show_label=True
+                        )
+                        output2 = gr.Markdown(label="Analyzed N-P-K Composition", value="**📁 Upload an image and press 'Analyze N-P-K Composition' to start analyzing.**")
+                
+                # Click event for uploaded file analysis
+                analyze_btn2.click(
+                    fn=lambda: (gr.update(value="🔄 **Analyzing...**", visible=True), 
+                               gr.update(interactive=False), 
+                               "", None),
+                    outputs=[loading_status2, analyze_btn2, output2, uploaded_image_output]
+                ).then(
+                    fn=get_npk_from_uploaded_file,
+                    inputs=[uploaded_file, npk_grid_data2, shadow_area2],
+                    outputs=[output2, uploaded_image_output]
+                ).then(
+                    fn=lambda: (gr.update(visible=False), gr.update(interactive=True)),
+                    outputs=[loading_status2, analyze_btn2]
+                )
             
     return app
 
