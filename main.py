@@ -1,6 +1,8 @@
 import gradio as gr
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import cv2
 from get_npk import (img_path_list, 
                      load_img_as_rgb, 
                      enhance_image, 
@@ -10,23 +12,28 @@ from get_npk import (img_path_list,
                      get_npk)
 
 
-# Wrapper functions to handle loading states
-def get_npk_from_img(folder, number, npk_grid_data, shadow_area):
+# Enhanced wrapper function to get NPK and generate images
+def get_npk_and_images(folder, number, npk_grid_data, shadow_area):
+    """Enhanced wrapper function to get NPK from image and generate visualization images"""
+    try:
+        img_path = img_path_list[folder][number]
+        w_comp = {'N': npk_grid_data.iloc[0, 1], 'P': npk_grid_data.iloc[0, 2], 'K': npk_grid_data.iloc[0, 3]}
+        r_comp = {'N': npk_grid_data.iloc[1, 1], 'P': npk_grid_data.iloc[1, 2], 'K': npk_grid_data.iloc[1, 3]}
+        s_comp = {'N': npk_grid_data.iloc[2, 1], 'P': npk_grid_data.iloc[2, 2], 'K': npk_grid_data.iloc[2, 3]}
+        b_comp = {'N': npk_grid_data.iloc[3, 1], 'P': npk_grid_data.iloc[3, 2], 'K': npk_grid_data.iloc[3, 3]}
 
-    """Wrapper function to get NPK from image with loading state management"""
-    img_path = img_path_list[folder][number]
-    w_comp = {'N': npk_grid_data.iloc[0, 1], 'P': npk_grid_data.iloc[0, 2], 'K': npk_grid_data.iloc[0, 3]}
-    r_comp = {'N': npk_grid_data.iloc[1, 1], 'P': npk_grid_data.iloc[1, 2], 'K': npk_grid_data.iloc[1, 3]}
-    s_comp = {'N': npk_grid_data.iloc[2, 1], 'P': npk_grid_data.iloc[2, 2], 'K': npk_grid_data.iloc[2, 3]}
-    b_comp = {'N': npk_grid_data.iloc[3, 1], 'P': npk_grid_data.iloc[3, 2], 'K': npk_grid_data.iloc[3, 3]}
-
-    return get_npk(img_path, w_comp, r_comp, s_comp, b_comp, shadow_area)
-
-def gr_print(*args, sep=" ", end="\n"):
-    global gr_output_log
-    message = sep.join(str(arg) for arg in args) + end
-    gr_output_log.append(message)
-    return "".join(gr_output_log)  # Return whole log as one string
+        # Get NPK result
+        npk_result = get_npk(img_path, w_comp, r_comp, s_comp, b_comp, shadow_area)
+        
+        # Generate initial image
+        initial_image = load_img_as_rgb(img_path)
+        
+        return npk_result, initial_image
+        
+    except Exception as e:
+        error_msg = f"Error processing image: {str(e)}"
+        # Return error message and None images
+        return error_msg, None, None
 
 # Create Gradio Interface
 def create_app():
@@ -91,18 +98,25 @@ def create_app():
                     
                     with gr.Column():
                         loading_status1 = gr.Markdown("", visible=False)
+                        gr.Markdown("**Original Image**")
+                        initial_image_output = gr.Image(
+                            label="Initial Picture",
+                            type="numpy",
+                            interactive=False,
+                            show_label=True
+                        )
                         output1 = gr.Markdown(label="Analyzed N-P-K Composition", value="**🔍 Press 'Analyze N-P-K Composition' to start analyzing.**")
                 
-                # Click event with loading states
+                # Click event with loading states and image outputs
                 analyze_btn1.click(
                     fn=lambda: (gr.update(value="🔄 **Analyzing...**", visible=True), 
                                gr.update(interactive=False), 
-                               ""),
-                    outputs=[loading_status1, analyze_btn1, output1]
+                               "", None, None),
+                    outputs=[loading_status1, analyze_btn1, output1, initial_image_output]
                 ).then(
-                    fn=get_npk_from_img,
+                    fn=get_npk_and_images,
                     inputs=[folder, number, npk_grid_data, shadow_area],
-                    outputs=output1
+                    outputs=[output1, initial_image_output]
                 ).then(
                     fn=lambda: (gr.update(visible=False), gr.update(interactive=True)),
                     outputs=[loading_status1, analyze_btn1]
@@ -116,7 +130,6 @@ def create_app():
 
 
 # Launch the application
-
 gr_output_log = []
 
 if __name__ == "__main__":
