@@ -165,16 +165,6 @@ def get_npk(img_path, w_comp, r_comp, s_comp, b_comp, shadow_area):
     red_beads = cluster_areas[2]
     black_beads = max(0, cluster_areas[3] - shadow_area)  # Ensure non-negative
 
-    # Fixed: Define compositions properly (removed overwriting of parameters)
-    if w_comp is None:
-        w_comp = {'N': 46, 'P': 0, 'K': 0}
-    if r_comp is None:
-        r_comp = {'N': 0, 'P': 0, 'K': 60}
-    if s_comp is None:
-        s_comp = {'N': 21, 'P': 0, 'K': 0}
-    if b_comp is None:
-        b_comp = {'N': 18, 'P': 46, 'K': 0}
-
     npk_total = {'N': 0, 'P': 0, 'K': 0}
 
     for key in npk_total:
