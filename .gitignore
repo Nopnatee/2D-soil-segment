@@ -4,6 +4,7 @@ pictures/
 Learn 2D-Segmentation.ipynb
 *.pth
 *.jpg
+.gradio
 
 # === OS files ===
 .DS_Store
