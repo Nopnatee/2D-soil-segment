@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
-from script_4_app import (img_path_list, 
+from script import (img_path_list, 
                      load_img_as_rgb, 
                      enhance_image, 
                      get_all_grouped_points, 
