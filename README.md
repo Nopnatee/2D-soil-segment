@@ -1,1 +1,5 @@
-the input pictures need to be in the folder pictures/'zip files'
+สรุป N-P-K ratio ต่อเม็ด:
+- แดง: 0-0-60
+- น้ำตาล (ดำ) 18% 46% 0%
+- ขาวสุดๆ: 46% 0% 0%
+- ขาวปนน้ำตาล: 21% 0% 0%
