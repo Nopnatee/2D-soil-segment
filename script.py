@@ -16,7 +16,7 @@ BRIGHTNESS_OFFSET = 0      # Offset for brightness adjustment
 # === Load the image path ===
 img_path_list = []
 folder_path_1 = "pictures/14-7-35"
-folder_path_2 = "pictures/15-7-18"
+folder_path_2 = "pictures/15-4-20"
 folder_path_3 = "pictures/15-15-15"
 folder_path_4 = "pictures/18-4-5"
 
