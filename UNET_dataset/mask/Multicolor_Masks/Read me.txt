@@ -1,0 +1,4 @@
+red mask = white bead
+yellow mask = red bead
+orange mask= black bead
+blue mask = black bead

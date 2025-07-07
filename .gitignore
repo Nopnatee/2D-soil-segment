@@ -5,6 +5,7 @@ Learn 2D-Segmentation.ipynb
 *.pth
 *.jpg
 .gradio
+UNET_dataset
 
 # === OS files ===
 .DS_Store
