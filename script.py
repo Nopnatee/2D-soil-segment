@@ -9,8 +9,8 @@ from tqdm import tqdm  # Added missing import
 
 # === FILTER CONFIG ===
 BEAD_MASKS = 4             # Number of clusters
-CONTRAST_FACTOR = 1.4       # >1 increases contrast
-SATURATION_FACTOR = 2.5       # >1 increases vividity
+CONTRAST_FACTOR = 1       # >1 increases contrast
+SATURATION_FACTOR = 1       # >1 increases vividity
 BRIGHTNESS_OFFSET = 0      # Offset for brightness adjustment
 
 # === Load the image path ===
