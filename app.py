@@ -1,226 +1,368 @@
 import gradio as gr
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import cv2
-from script import (img_path_list, 
-                     load_img_as_rgb, 
-                     enhance_image, 
-                     get_all_grouped_points, 
-                     get_cluster_mask, 
-                     get_area, 
-                     get_npk)
+import torch
+import matplotlib.pyplot as plt
+from PIL import Image
+import os
+import tempfile
+import io
+import base64
+from script import NPKPredictor
+import traceback
 
-
-# Enhanced wrapper function to get NPK and generate images
-def get_npk_and_images(folder, number, npk_grid_data, shadow_area):
-    """Enhanced wrapper function to get NPK from image and generate visualization images"""
-    try:
-        img_path = img_path_list[folder][number]
-        w_comp = {'N': npk_grid_data.iloc[0, 1], 'P': npk_grid_data.iloc[0, 2], 'K': npk_grid_data.iloc[0, 3]}
-        r_comp = {'N': npk_grid_data.iloc[1, 1], 'P': npk_grid_data.iloc[1, 2], 'K': npk_grid_data.iloc[1, 3]}
-        s_comp = {'N': npk_grid_data.iloc[2, 1], 'P': npk_grid_data.iloc[2, 2], 'K': npk_grid_data.iloc[2, 3]}
-        b_comp = {'N': npk_grid_data.iloc[3, 1], 'P': npk_grid_data.iloc[3, 2], 'K': npk_grid_data.iloc[3, 3]}
-
-        # Get NPK result
-        npk_result = get_npk(img_path, w_comp, r_comp, s_comp, b_comp, shadow_area)
-        
-        # Generate initial image
-        initial_image = load_img_as_rgb(img_path)
-        
-        return npk_result, initial_image
-        
-    except Exception as e:
-        error_msg = f"Error processing image: {str(e)}"
-        # Return error message and None images
-        return error_msg, None
-
-
-# New function for direct file upload
-def get_npk_from_uploaded_file(uploaded_file, npk_grid_data, shadow_area):
-    """Enhanced wrapper function to get NPK from uploaded image file"""
-    try:
-        if uploaded_file is None:
-            return "Please upload an image file first.", None
-        
-        # Extract NPK compositions from the dataframe
-        w_comp = {'N': npk_grid_data.iloc[0, 1], 'P': npk_grid_data.iloc[0, 2], 'K': npk_grid_data.iloc[0, 3]}
-        r_comp = {'N': npk_grid_data.iloc[1, 1], 'P': npk_grid_data.iloc[1, 2], 'K': npk_grid_data.iloc[1, 3]}
-        s_comp = {'N': npk_grid_data.iloc[2, 1], 'P': npk_grid_data.iloc[2, 2], 'K': npk_grid_data.iloc[2, 3]}
-        b_comp = {'N': npk_grid_data.iloc[3, 1], 'P': npk_grid_data.iloc[3, 2], 'K': npk_grid_data.iloc[3, 3]}
-
-        # Get NPK result using the uploaded file path
-        npk_result = get_npk(uploaded_file, w_comp, r_comp, s_comp, b_comp, shadow_area)
-        
-        # Load and return the uploaded image
-        uploaded_image = load_img_as_rgb(uploaded_file)
-        
-        return npk_result, uploaded_image
-        
-    except Exception as e:
-        error_msg = f"Error processing uploaded image: {str(e)}"
-        # Return error message and None image
-        return error_msg, None
-
-
-# Create Gradio Interface
-def create_app():
-    """Create the main Gradio application"""
+class NPKGradioApp:
+    def __init__(self):
+        """Initialize the Gradio app with NPK predictor"""
+        self.predictor = None
+        self.initialize_predictor()
     
-    with gr.Blocks(title="Soil 2D Segmentation Analysis Approximating N-P-K Composition", theme=gr.themes.Soft()) as app:
+    def initialize_predictor(self):
+        """Initialize the NPK predictor with default model paths"""
+        try:
+            self.predictor = NPKPredictor(
+                unet_model_path="checkpoints/best_model.pth",
+                regression_model_path="checkpoints/regression_model.pkl"
+            )
+            return "✅ Models loaded successfully!"
+        except Exception as e:
+            error_msg = f"❌ Error loading models: {str(e)}"
+            print(error_msg)
+            return error_msg
+    
+    def predict_npk_from_image(self, image, use_gpu=True):
+        """
+        Main prediction function for Gradio interface
         
-        gr.Markdown("""
-# Soil 2D Segmentation Analysis Approximating N-P-K Composition
-- This script analyzes images of fertilizer beads to estimate their NPK (Nitrogen-Phosphorus-Potassium) composition using image enhancement, clustering, and pixel area analysis.
-## 🧠 How it works:
-### Image Loading & Enhancement:
-- Loads all .jpg/.png images from specific folders.
-- Enhances contrast, saturation, and brightness while preserving pure green pixels (used as background or markers).
-### Clustering with KMeans:
-- Non-green pixels from each image are clustered into 4 groups using KMeans based on color similarity.
-### Mask Creation & Sorting:
-- Generates a binary mask for each cluster.
-- Sorts clusters by average brightness (from brightest to darkest), assuming this brightness correlates with specific bead types (white, stain, red, black).
-### Area Calculation:
-- Measures the pixel area of each cluster to estimate the quantity of each bead type.
-### NPK Estimation:
-- Applies predefined nutrient compositions to each bead color.
-- Calculates the total and average NPK composition based on the bead areas.
-### Main Execution:
-- Tries to process the image print its NPK composition.
-        """)
-
-        with gr.Tabs():
+        Args:
+            image: PIL Image or numpy array from Gradio
+            use_gpu: Whether to use GPU acceleration
+        
+        Returns:
+            tuple: (results_text, visualization_image)
+        """
+        if self.predictor is None:
+            return "❌ Models not loaded. Please check model files.", None
+        
+        if image is None:
+            return "❌ Please upload an image first.", None
+        
+        try:
+            # Save uploaded image to temporary file
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                if isinstance(image, np.ndarray):
+                    # Convert numpy array to PIL Image
+                    pil_image = Image.fromarray(image)
+                else:
+                    pil_image = image
+                
+                # Save as RGB
+                pil_image.convert('RGB').save(tmp_file.name, 'JPEG')
+                temp_path = tmp_file.name
             
-            # Tab 1: Chapter 1 - Basic Communication
-            with gr.TabItem("Load Image From Computer"):
-                gr.Markdown("""This will load image from folder |pictures/14-7-35|, |pictures/15-7-18|, |pictures/15-15-15|, |pictures/18-4-5| from you current directory.""")
-                
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("**Select Image**")
-                        folder = gr.Number(label="Folder Index", value=0, precision=0, 
-                                      info="Select the folder index (0-3) containing images: 0 for 14-7-35, 1 for 15-7-18, 2 for 15-15-15, 3 for 18-4-5.")
-                        number = gr.Number(label="Image Index", value=0, precision=0,
-                                      info="Select the image number within the folder (0-?).")
-                        gr.Markdown("**Bead NPK Compositions (N, P, K)**")
-                        npk_grid_data = gr.Dataframe(
-                            label="NPK Composition",
-                            headers=["Color", "N", "P", "K"],
-                            datatype=["str","number", "number", "number"],
-                            row_count=4,
-                            col_count=4,
-                            value=[
-                                ["White", 46, 0, 0],   # White
-                                ["Red", 0, 0, 60],   # Red
-                                ["Stain", 21, 0, 0],   # Stain
-                                ["Black", 18, 46, 0]   # Black
-                            ],
-                            interactive=True
-                        )
-                        gr.Markdown("**Shadow Area**")
-                        shadow_area = gr.Number(label="Shadow Area", value=200000, precision=2,
-                                              info="Area of the shadow in pixels, used to exclude it from NPK calculations.")
-                        with gr.Row():
-                            analyze_btn1 = gr.Button("🔍 Analyze N-P-K Composition", variant="primary")
+            # Make prediction
+            results = self.predictor.predict_from_image(temp_path, use_gpu=use_gpu)
+            
+            # Clean up temporary file
+            os.unlink(temp_path)
+            
+            if results is None:
+                return "❌ Prediction failed. Please try again.", None
+            
+            # Format results
+            results_text = self.format_results(results)
+            
+            # Create visualization
+            viz_image = self.create_visualization(image, results)
+            
+            return results_text, viz_image
+            
+        except Exception as e:
+            error_msg = f"❌ Error during prediction: {str(e)}\n{traceback.format_exc()}"
+            print(error_msg)
+            return error_msg, None
+    
+    def format_results(self, results):
+        """Format prediction results for display"""
+        if results is None:
+            return "No results available"
+        
+        # Extract values
+        cluster_areas = results['cluster_areas']
+        approx_npk = results['approximate_npk']
+        predicted_npk = results['predicted_npk']
+        
+        # Create formatted output
+        output = []
+        output.append("🔬 **NPK Prediction Results**")
+        output.append("=" * 40)
+        
+        # Cluster areas
+        output.append("\n📊 **Cluster Areas:**")
+        cluster_names = ["White Beads", "Stain Beads", "Red Beads", "Black Beads"]
+        for i, (name, area) in enumerate(zip(cluster_names, cluster_areas)):
+            output.append(f"  • {name}: {area:,} pixels")
+        
+        total_area = sum(cluster_areas)
+        output.append(f"  • **Total Area**: {total_area:,} pixels")
+        
+        # Percentages
+        output.append("\n📈 **Composition Percentages:**")
+        for i, (name, area) in enumerate(zip(cluster_names, cluster_areas)):
+            percentage = (area / total_area * 100) if total_area > 0 else 0
+            output.append(f"  • {name}: {percentage:.1f}%")
+        
+        # NPK Values
+        output.append("\n🧪 **NPK Analysis:**")
+        output.append("\n**Approximate NPK (Rule-based):**")
+        output.append(f"  • Nitrogen (N): {approx_npk[0]:.2f}%")
+        output.append(f"  • Phosphorus (P): {approx_npk[1]:.2f}%")
+        output.append(f"  • Potassium (K): {approx_npk[2]:.2f}%")
+        
+        output.append("\n**Predicted NPK (ML Model):**")
+        output.append(f"  • Nitrogen (N): {predicted_npk[0]:.2f}%")
+        output.append(f"  • Phosphorus (P): {predicted_npk[1]:.2f}%")
+        output.append(f"  • Potassium (K): {predicted_npk[2]:.2f}%")
+        
+        return "\n".join(output)
+    
+    def create_visualization(self, original_image, results):
+        """Create a visualization of the prediction results"""
+        try:
+            # Convert to numpy array if needed
+            if isinstance(original_image, Image.Image):
+                img_array = np.array(original_image)
+            else:
+                img_array = original_image
+            
+            # Create figure with subplots
+            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
+            fig.suptitle('NPK Prediction Analysis', fontsize=16, fontweight='bold')
+            
+            # Original image
+            ax1.imshow(img_array)
+            ax1.set_title('Original Image')
+            ax1.axis('off')
+            
+            # Cluster areas bar chart
+            cluster_names = ['White', 'Stain', 'Red', 'Black']
+            cluster_areas = results['cluster_areas']
+            colors = ['lightgray', 'orange', 'red', 'black']
+            
+            bars = ax2.bar(cluster_names, cluster_areas, color=colors, alpha=0.7)
+            ax2.set_title('Cluster Areas (pixels)')
+            ax2.set_ylabel('Area (pixels)')
+            ax2.tick_params(axis='x', rotation=45)
+            
+            # Add value labels on bars
+            for bar, area in zip(bars, cluster_areas):
+                height = bar.get_height()
+                ax2.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{area:,}', ha='center', va='bottom', fontsize=8)
+            
+            # NPK comparison chart
+            approx_npk = results['approximate_npk']
+            predicted_npk = results['predicted_npk']
+            
+            x = np.arange(3)
+            width = 0.35
+            
+            ax3.bar(x - width/2, approx_npk, width, label='Area approximated', alpha=0.7, color='lightblue')
+            ax3.bar(x + width/2, predicted_npk, width, label='Regression predicted', alpha=0.7, color='darkblue')
+            
+            ax3.set_title('NPK Comparison')
+            ax3.set_ylabel('Percentage (%)')
+            ax3.set_xticks(x)
+            ax3.set_xticklabels(['N', 'P', 'K'])
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+            
+            # Add value labels
+            for i, (approx, pred) in enumerate(zip(approx_npk, predicted_npk)):
+                ax3.text(i - width/2, approx + 0.5, f'{approx:.1f}', 
+                        ha='center', va='bottom', fontsize=8)
+                ax3.text(i + width/2, pred + 0.5, f'{pred:.1f}', 
+                        ha='center', va='bottom', fontsize=8)
+            
+            # Composition pie chart
+            total_area = sum(cluster_areas)
+            if total_area > 0:
+                percentages = [(area/total_area)*100 for area in cluster_areas]
+                # Only show non-zero percentages
+                non_zero_idx = [i for i, p in enumerate(percentages) if p > 0]
+                if non_zero_idx:
+                    pie_labels = [cluster_names[i] for i in non_zero_idx]
+                    pie_values = [percentages[i] for i in non_zero_idx]
+                    pie_colors = [colors[i] for i in non_zero_idx]
                     
-                    with gr.Column():
-                        loading_status1 = gr.Markdown("", visible=False)
-                        gr.Markdown("**Original Image**")
-                        initial_image_output = gr.Image(
-                            label="Initial Picture",
-                            type="numpy",
-                            interactive=False,
-                            show_label=True
-                        )
-                        output1 = gr.Markdown(label="Analyzed N-P-K Composition", value="**🔍 Press 'Analyze N-P-K Composition' to start analyzing.**")
-                
-                # Click event with loading states and image outputs
-                analyze_btn1.click(
-                    fn=lambda: (gr.update(value="🔄 **Analyzing...**", visible=True), 
-                               gr.update(interactive=False), 
-                               "", None),
-                    outputs=[loading_status1, analyze_btn1, output1, initial_image_output]
-                ).then(
-                    fn=get_npk_and_images,
-                    inputs=[folder, number, npk_grid_data, shadow_area],
-                    outputs=[output1, initial_image_output]
-                ).then(
-                    fn=lambda: (gr.update(visible=False), gr.update(interactive=True)),
-                    outputs=[loading_status1, analyze_btn1]
+                    wedges, texts, autotexts = ax4.pie(pie_values, labels=pie_labels, 
+                                                      colors=pie_colors, autopct='%1.1f%%',
+                                                      startangle=90)
+                    ax4.set_title('Bead Composition')
+                else:
+                    ax4.text(0.5, 0.5, 'No beads detected', ha='center', va='center', 
+                            transform=ax4.transAxes)
+                    ax4.set_title('Bead Composition')
+            else:
+                ax4.text(0.5, 0.5, 'No area detected', ha='center', va='center', 
+                        transform=ax4.transAxes)
+                ax4.set_title('Bead Composition')
+            
+            plt.tight_layout()
+            
+            # Convert plot to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+            buf.seek(0)
+            
+            # Convert to PIL Image
+            viz_image = Image.open(buf)
+            plt.close(fig)
+            
+            return viz_image
+            
+        except Exception as e:
+            print(f"Error creating visualization: {e}")
+            return None
+    
+    def create_interface(self):
+        """Create the Gradio interface"""
+        
+        # Custom CSS for better styling
+        custom_css = """
+        .gradio-container {
+            max-width: 1200px !important;
+        }
+        .output-text {
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+        """
+        
+        # Create the interface
+        with gr.Blocks(css=custom_css, title="NPK Soil Analysis") as interface:
+            
+            # Header
+            gr.Markdown("""
+            # 🌱 NPK Soil Analysis System
+            
+            Upload an image of soil beads to analyze NPK (Nitrogen, Phosphorus, Potassium) content.
+            The system uses a U-Net model for bead segmentation and machine learning for NPK prediction.
+            
+            **Instructions:**
+            1. Upload a clear image of soil beads
+            2. Choose whether to use GPU acceleration (if available)
+            3. Click "Analyze NPK" to get results
+            """)
+            
+            # Model status
+            with gr.Row():
+                model_status = gr.Textbox(
+                    value=self.initialize_predictor(),
+                    label="Model Status",
+                    interactive=False
                 )
             
-            # Tab 2: Upload Image Directly
-            with gr.TabItem("Upload Image Directly"):
-                gr.Markdown("""Upload your own image file (.jpg, .png) to analyze its NPK composition directly.""")
-                
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("**Upload Image**")
-                        uploaded_file = gr.File(
-                            label="Select Image File (.jpg, .jpeg, .png)",
-                            file_types=[".jpg", ".jpeg", ".png"],
-                            file_count="single"
-                        )
-                        gr.Markdown("*Upload a .jpg or .png image of fertilizer beads for analysis.*")
-                        gr.Markdown("**Bead NPK Compositions (N, P, K)**")
-                        npk_grid_data2 = gr.Dataframe(
-                            label="NPK Composition",
-                            headers=["Color", "N", "P", "K"],
-                            datatype=["str","number", "number", "number"],
-                            row_count=4,
-                            col_count=4,
-                            value=[
-                                ["White", 46, 0, 0],   # White
-                                ["Red", 0, 0, 60],   # Red
-                                ["Stain", 21, 0, 0],   # Stain
-                                ["Black", 18, 46, 0]   # Black
-                            ],
-                            interactive=True
-                        )
-                        gr.Markdown("**Shadow Area**")
-                        shadow_area2 = gr.Number(label="Shadow Area", value=200000, precision=2,
-                                               info="Area of the shadow in pixels, used to exclude it from NPK calculations.")
-                        with gr.Row():
-                            analyze_btn2 = gr.Button("🔍 Analyze N-P-K Composition", variant="primary")
+            # Main interface
+            with gr.Row():
+                with gr.Column(scale=1):
+                    # Input section
+                    gr.Markdown("### 📤 Input")
                     
-                    with gr.Column():
-                        loading_status2 = gr.Markdown("", visible=False)
-                        gr.Markdown("**Uploaded Image**")
-                        uploaded_image_output = gr.Image(
-                            label="Uploaded Picture",
-                            type="numpy",
-                            interactive=False,
-                            show_label=True
-                        )
-                        output2 = gr.Markdown(label="Analyzed N-P-K Composition", value="**📁 Upload an image and press 'Analyze N-P-K Composition' to start analyzing.**")
+                    image_input = gr.Image(
+                        label="Upload Soil Bead Image",
+                        type="pil",
+                        height=300
+                    )
+                    
+                    use_gpu = gr.Checkbox(
+                        label="Use GPU Acceleration",
+                        value=True,
+                        info="Enable if you have a CUDA-compatible GPU"
+                    )
+                    
+                    analyze_btn = gr.Button(
+                        "🔬 Analyze NPK",
+                        variant="primary",
+                        size="lg"
+                    )
+                    
+                    # Example images section
+                    gr.Markdown("### 📋 Example Images")
+                    gr.Examples(
+                        examples=[
+                            # Add example image paths here if available
+                            # ["examples/sample1.jpg"],
+                            # ["examples/sample2.jpg"],
+                        ],
+                        inputs=[image_input],
+                        label="Try these examples"
+                    )
                 
-                # Click event for uploaded file analysis
-                analyze_btn2.click(
-                    fn=lambda: (gr.update(value="🔄 **Analyzing...**", visible=True), 
-                               gr.update(interactive=False), 
-                               "", None),
-                    outputs=[loading_status2, analyze_btn2, output2, uploaded_image_output]
-                ).then(
-                    fn=get_npk_from_uploaded_file,
-                    inputs=[uploaded_file, npk_grid_data2, shadow_area2],
-                    outputs=[output2, uploaded_image_output]
-                ).then(
-                    fn=lambda: (gr.update(visible=False), gr.update(interactive=True)),
-                    outputs=[loading_status2, analyze_btn2]
-                )
+                with gr.Column(scale=2):
+                    # Output section
+                    gr.Markdown("### 📊 Results")
+                    
+                    with gr.Row():
+                        with gr.Column():
+                            results_text = gr.Textbox(
+                                label="NPK Analysis Results",
+                                value="Upload an image and click 'Analyze NPK' to see results here.",
+                                lines=20,
+                                max_lines=25,
+                                elem_classes=["output-text"]
+                            )
+                        
+                        with gr.Column():
+                            visualization = gr.Image(
+                                label="Analysis Visualization",
+                                height=400
+                            )
             
-    return app
+            # Advanced options (collapsed by default)
+            with gr.Accordion("⚙️ Advanced Options", open=False):
+                gr.Markdown("""
+                **Model Information:**
+                - U-Net model performs bead segmentation into 4 classes
+                - Regression model predicts NPK values from bead areas
+                - GPU acceleration requires CUDA-compatible hardware
+                
+                **Bead Types:**
+                - White beads: High nitrogen content
+                - Stain beads: Medium nitrogen content  
+                - Red beads: High potassium content
+                - Black beads: High phosphorus content
+                """)
+            
+            # Set up the prediction function
+            analyze_btn.click(
+                fn=self.predict_npk_from_image,
+                inputs=[image_input, use_gpu],
+                outputs=[results_text, visualization],
+                show_progress=True
+            )
+            
+            # Footer
+            gr.Markdown("""
+            ---
+            **Note:** This is a research tool. For agricultural decisions, please consult with soil testing professionals.
+            """)
+        
+        return interface
 
-
-# Launch the application
-gr_output_log = []
+def main():
+    """Main function to run the Gradio app"""
+    app = NPKGradioApp()
+    interface = app.create_interface()
+    
+    # Launch the interface
+    interface.launch(
+        server_name="0.0.0.0",  # Allow external access
+        server_port=7860,       # Default Gradio port
+        share=False,            # Set to True to create a public link
+        debug=True,             # Enable debug mode
+        show_error=True         # Show detailed error messages
+    )
 
 if __name__ == "__main__":
-    app = create_app()
-    app.launch(
-        share=True,  # Set to True if you want to create a public link
-        server_name="0.0.0.0",  # Allow external access
-        server_port=7860,  # Default Gradio port
-        debug=True
-    )
+    main()

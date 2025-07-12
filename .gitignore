@@ -6,6 +6,8 @@ Learn 2D-Segmentation.ipynb
 *.jpg
 .gradio
 UNET_dataset
+regressor_dataset
+checkpoints
 
 
 # === OS files ===
