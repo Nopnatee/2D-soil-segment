@@ -359,9 +359,10 @@ def main():
     interface.launch(
         server_name="0.0.0.0",  # Allow external access
         server_port=7860,       # Default Gradio port
-        share=False,            # Set to True to create a public link
+        share=True,            # Set to True to create a public link
         debug=True,             # Enable debug mode
-        show_error=True         # Show detailed error messages
+        show_error=True,         # Show detailed error messages
+        inbrowser=True  # Auto-open in browser
     )
 
 if __name__ == "__main__":
