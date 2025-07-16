@@ -47,19 +47,19 @@ class NPKPredictorGradio:
         # Updated color map to match the reference image
         self.color_map = {
             0: [139, 69, 19],    # Background - brown/dark brown (matches image)
-            1: [255, 0, 0],      # Class 1 - red
-            2: [255, 255, 0],    # Class 2 - yellow  
-            3: [0, 255, 255],    # Class 3 - cyan
-            4: [0, 255, 0],      # Class 4 - green
+            1: [255, 0, 0],      # Class 1 
+            2: [255, 255, 0],    # Class 2 
+            3: [0, 255, 255],    # Class 3 
+            4: [0, 255, 0],      # Class 4 
         }
         
         # Class names for better labeling
         self.class_names = {
             0: 'Background',
-            1: 'Class 1',
-            2: 'Class 2', 
-            3: 'Class 3',
-            4: 'Class 4'
+            1: 'black',
+            2: 'red', 
+            3: 'stain',
+            4: 'white'
         }
     
     def _load_models(self, unet_path, regression_path):
