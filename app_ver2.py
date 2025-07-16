@@ -46,11 +46,11 @@ class NPKPredictorGradio:
         
         # Updated color map to match the reference image
         self.color_map = {
-            0: [139, 69, 19],    # Background - brown/dark brown (matches image)
-            1: [255, 0, 0],      # Class 1 
-            2: [255, 255, 0],    # Class 2 
-            3: [0, 255, 255],    # Class 3 
-            4: [0, 255, 0],      # Class 4 
+            0: [0, 0, 0],    # Background - brown/dark brown (matches image)
+            1: [139, 69, 19],      # Class 1 
+            2: [255, 0, 0],    # Class 2 
+            3: [255, 255, 0],    # Class 3 
+            4: [0, 255, 255],      # Class 4 
         }
         
         # Class names for better labeling
@@ -70,11 +70,11 @@ class NPKPredictorGradio:
             unet_model = SimpleUNet(in_channels=3, n_classes=self.NUM_CLASSES)
             unet_model.load_state_dict(checkpoint['model_state_dict'])
             unet_model.eval().to(self.DEVICE)
-            print(f"U-Net model loaded from: {unet_path}")
+            print(f"U-Net model loaded from: {unet_path} as {type(unet_model)}")
             
             # Load regression model
             self.regressor = joblib.load(regression_path)
-            print(f"Regression model loaded from: {regression_path}")
+            print(f"Regression model loaded from: {regression_path} as {type(self.regressor)}")
             
             return unet_model
             
