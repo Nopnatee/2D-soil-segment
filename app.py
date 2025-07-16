@@ -1,369 +1,413 @@
 import gradio as gr
-import numpy as np
 import cv2
+import numpy as np
 import torch
+import torch.nn.functional as F
+import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 from PIL import Image
-import os
-import tempfile
+import joblib
 import io
 import base64
-from script import NPKPredictor
-import traceback
 
-class NPKGradioApp:
-    def __init__(self):
-        """Initialize the Gradio app with NPK predictor"""
-        self.predictor = None
-        self.initialize_predictor()
+# Import your custom U-Net
+from custom_unet import SimpleUNet, ConvBlock
+
+class NPKPredictorGradio:
+    """Enhanced NPK prediction system with visualization for Gradio interface."""
     
-    def initialize_predictor(self):
-        """Initialize the NPK predictor with default model paths"""
-        try:
-            self.predictor = NPKPredictor(
-                unet_model_path="checkpoints/best_model.pth",
-                regression_model_path="checkpoints/regression_model.pkl"
-            )
-            return "✅ Models loaded successfully!"
-        except Exception as e:
-            error_msg = f"❌ Error loading models: {str(e)}"
-            print(error_msg)
-            return error_msg
+    def __init__(self, 
+                 unet_model_path="checkpoints/best_model.pth",
+                 regression_model_path="checkpoints/regression_model.pkl",
+                 num_classes=5):
+        """Initialize the NPK Predictor with model paths."""
+        self.NUM_CLASSES = num_classes
+        self.DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        print(f"Using device: {self.DEVICE}")
+        
+        # Load models
+        self.unet_model = self._load_models(unet_model_path, regression_model_path)
+        
+        # Initialize transforms
+        self.transform = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        # Bead compositions for NPK calculation
+        self.bead_compositions = [
+            {'N': 18, 'P': 46, 'K': 0, 'color': 'black', 'name': 'Black Beads'},   # black
+            {'N': 0, 'P': 0, 'K': 60, 'color': 'red', 'name': 'Red Beads'},       # red  
+            {'N': 21, 'P': 0, 'K': 0, 'color': 'brown', 'name': 'Brown Beads'},   # stain
+            {'N': 46, 'P': 0, 'K': 0, 'color': 'white', 'name': 'White Beads'}    # white
+        ]
+        
+        # Color map for visualization
+        self.color_map = {
+            0: [0, 0, 0],        # background - black
+            1: [255, 0, 0],      # class 1 - red
+            2: [0, 255, 0],      # class 2 - green
+            3: [0, 0, 255],      # class 3 - blue
+            4: [255, 255, 0],    # class 4 - yellow
+        }
     
-    def predict_npk_from_image(self, image, use_gpu=True):
-        """
-        Main prediction function for Gradio interface
-        
-        Args:
-            image: PIL Image or numpy array from Gradio
-            use_gpu: Whether to use GPU acceleration
-        
-        Returns:
-            tuple: (results_text, visualization_image)
-        """
-        if self.predictor is None:
-            return "❌ Models not loaded. Please check model files.", None
-        
-        if image is None:
-            return "❌ Please upload an image first.", None
-        
+    def _load_models(self, unet_path, regression_path):
+        """Load both U-Net and regression models."""
         try:
-            # Save uploaded image to temporary file
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                if isinstance(image, np.ndarray):
-                    # Convert numpy array to PIL Image
-                    pil_image = Image.fromarray(image)
-                else:
-                    pil_image = image
-                
-                # Save as RGB
-                pil_image.convert('RGB').save(tmp_file.name, 'JPEG')
-                temp_path = tmp_file.name
+            # Load U-Net
+            checkpoint = torch.load(unet_path, map_location=self.DEVICE)
+            unet_model = SimpleUNet(in_channels=3, n_classes=self.NUM_CLASSES)
+            unet_model.load_state_dict(checkpoint['model_state_dict'])
+            unet_model.eval().to(self.DEVICE)
+            print(f"U-Net model loaded from: {unet_path}")
             
-            # Make prediction
-            results = self.predictor.predict_from_image(temp_path, use_gpu=use_gpu)
+            # Load regression model
+            self.regressor = joblib.load(regression_path)
+            print(f"Regression model loaded from: {regression_path}")
             
-            # Clean up temporary file
-            os.unlink(temp_path)
-            
-            if results is None:
-                return "❌ Prediction failed. Please try again.", None
-            
-            # Format results
-            results_text = self.format_results(results)
-            
-            # Create visualization
-            viz_image = self.create_visualization(image, results)
-            
-            return results_text, viz_image
+            return unet_model
             
         except Exception as e:
-            error_msg = f"❌ Error during prediction: {str(e)}\n{traceback.format_exc()}"
-            print(error_msg)
-            return error_msg, None
-    
-    def format_results(self, results):
-        """Format prediction results for display"""
-        if results is None:
-            return "No results available"
-        
-        # Extract values
-        cluster_areas = results['cluster_areas']
-        approx_npk = results['approximate_npk']
-        predicted_npk = results['predicted_npk']
-        
-        # Create formatted output
-        output = []
-        output.append("🔬 **NPK Prediction Results**")
-        output.append("=" * 40)
-        
-        # Cluster areas
-        output.append("\n📊 **Cluster Areas:**")
-        cluster_names = ["White Beads", "Stain Beads", "Red Beads", "Black Beads"]
-        for i, (name, area) in enumerate(zip(cluster_names, cluster_areas)):
-            output.append(f"  • {name}: {area:,} pixels")
-        
-        total_area = sum(cluster_areas)
-        output.append(f"  • **Total Area**: {total_area:,} pixels")
-        
-        # Percentages
-        output.append("\n📈 **Composition Percentages:**")
-        for i, (name, area) in enumerate(zip(cluster_names, cluster_areas)):
-            percentage = (area / total_area * 100) if total_area > 0 else 0
-            output.append(f"  • {name}: {percentage:.1f}%")
-        
-        # NPK Values
-        output.append("\n🧪 **NPK Analysis:**")
-        output.append("\n**Approximate NPK (Rule-based):**")
-        output.append(f"  • Nitrogen (N): {approx_npk[0]:.2f}%")
-        output.append(f"  • Phosphorus (P): {approx_npk[1]:.2f}%")
-        output.append(f"  • Potassium (K): {approx_npk[2]:.2f}%")
-        
-        output.append("\n**Predicted NPK (ML Model):**")
-        output.append(f"  • Nitrogen (N): {predicted_npk[0]:.2f}%")
-        output.append(f"  • Phosphorus (P): {predicted_npk[1]:.2f}%")
-        output.append(f"  • Potassium (K): {predicted_npk[2]:.2f}%")
-        
-        return "\n".join(output)
-    
-    def create_visualization(self, original_image, results):
-        """Create a visualization of the prediction results"""
-        try:
-            # Convert to numpy array if needed
-            if isinstance(original_image, Image.Image):
-                img_array = np.array(original_image)
-            else:
-                img_array = original_image
-            
-            # Create figure with subplots
-            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
-            fig.suptitle('NPK Prediction Analysis', fontsize=16, fontweight='bold')
-            
-            # Original image
-            ax1.imshow(img_array)
-            ax1.set_title('Original Image')
-            ax1.axis('off')
-            
-            # Cluster areas bar chart
-            cluster_names = ['White', 'Stain', 'Red', 'Black']
-            cluster_areas = results['cluster_areas']
-            colors = ['lightgray', 'orange', 'red', 'black']
-            
-            bars = ax2.bar(cluster_names, cluster_areas, color=colors, alpha=0.7)
-            ax2.set_title('Cluster Areas (pixels)')
-            ax2.set_ylabel('Area (pixels)')
-            ax2.tick_params(axis='x', rotation=45)
-            
-            # Add value labels on bars
-            for bar, area in zip(bars, cluster_areas):
-                height = bar.get_height()
-                ax2.text(bar.get_x() + bar.get_width()/2., height,
-                        f'{area:,}', ha='center', va='bottom', fontsize=8)
-            
-            # NPK comparison chart
-            approx_npk = results['approximate_npk']
-            predicted_npk = results['predicted_npk']
-            
-            x = np.arange(3)
-            width = 0.35
-            
-            ax3.bar(x - width/2, approx_npk, width, label='Area approximated', alpha=0.7, color='lightblue')
-            ax3.bar(x + width/2, predicted_npk, width, label='Regression predicted', alpha=0.7, color='darkblue')
-            
-            ax3.set_title('NPK Comparison')
-            ax3.set_ylabel('Percentage (%)')
-            ax3.set_xticks(x)
-            ax3.set_xticklabels(['N', 'P', 'K'])
-            ax3.legend()
-            ax3.grid(True, alpha=0.3)
-            
-            # Add value labels
-            for i, (approx, pred) in enumerate(zip(approx_npk, predicted_npk)):
-                ax3.text(i - width/2, approx + 0.5, f'{approx:.1f}', 
-                        ha='center', va='bottom', fontsize=8)
-                ax3.text(i + width/2, pred + 0.5, f'{pred:.1f}', 
-                        ha='center', va='bottom', fontsize=8)
-            
-            # Composition pie chart
-            total_area = sum(cluster_areas)
-            if total_area > 0:
-                percentages = [(area/total_area)*100 for area in cluster_areas]
-                # Only show non-zero percentages
-                non_zero_idx = [i for i, p in enumerate(percentages) if p > 0]
-                if non_zero_idx:
-                    pie_labels = [cluster_names[i] for i in non_zero_idx]
-                    pie_values = [percentages[i] for i in non_zero_idx]
-                    pie_colors = [colors[i] for i in non_zero_idx]
-                    
-                    wedges, texts, autotexts = ax4.pie(pie_values, labels=pie_labels, 
-                                                      colors=pie_colors, autopct='%1.1f%%',
-                                                      startangle=90)
-                    ax4.set_title('Bead Composition')
-                else:
-                    ax4.text(0.5, 0.5, 'No beads detected', ha='center', va='center', 
-                            transform=ax4.transAxes)
-                    ax4.set_title('Bead Composition')
-            else:
-                ax4.text(0.5, 0.5, 'No area detected', ha='center', va='center', 
-                        transform=ax4.transAxes)
-                ax4.set_title('Bead Composition')
-            
-            plt.tight_layout()
-            
-            # Convert plot to image
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-            buf.seek(0)
-            
-            # Convert to PIL Image
-            viz_image = Image.open(buf)
-            plt.close(fig)
-            
-            return viz_image
-            
-        except Exception as e:
-            print(f"Error creating visualization: {e}")
+            print(f"Error loading models: {e}")
+            self.regressor = None
             return None
     
-    def create_interface(self):
-        """Create the Gradio interface"""
+    def _get_segmentation_mask(self, image_array):
+        """Get segmentation mask from image array using U-Net."""
+        if self.unet_model is None:
+            raise ValueError("U-Net model not loaded properly")
         
-        # Custom CSS for better styling
-        custom_css = """
-        .gradio-container {
-            max-width: 1200px !important;
-        }
-        .output-text {
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-        }
-        """
+        # Convert to RGB if needed
+        if len(image_array.shape) == 3 and image_array.shape[2] == 3:
+            rgb_image = image_array
+        else:
+            rgb_image = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
         
-        # Create the interface
-        with gr.Blocks(css=custom_css, title="NPK Soil Analysis") as interface:
+        pil_image = Image.fromarray(rgb_image.astype(np.uint8))
+        
+        # Transform and predict
+        input_tensor = self.transform(pil_image).unsqueeze(0).to(self.DEVICE)
+        
+        with torch.no_grad():
+            output = self.unet_model(input_tensor)
+        
+        # Get prediction mask
+        if output.shape[1] == 1:
+            pred_mask = torch.sigmoid(output).squeeze().cpu().numpy()
+            pred_mask = (pred_mask > 0.5).astype(np.uint8)
+        else:
+            pred_mask = torch.argmax(output, dim=1).squeeze().cpu().numpy()
+        
+        # Resize back to original size
+        original_size = rgb_image.shape[:2]
+        pred_mask = cv2.resize(pred_mask.astype(np.uint8), 
+                              (original_size[1], original_size[0]), 
+                              interpolation=cv2.INTER_NEAREST)
+        
+        return pred_mask, rgb_image
+    
+    def create_visualization_plots(self, image_array, pred_mask, cluster_areas, approx_npk, predicted_npk):
+        """Create comprehensive visualization plots."""
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        fig.suptitle('NPK Prediction Analysis', fontsize=16, fontweight='bold')
+        
+        # 1. Original Image
+        axes[0, 0].imshow(image_array)
+        axes[0, 0].set_title('Original Image', fontsize=14)
+        axes[0, 0].axis('off')
+        
+        # 2. Segmentation Mask
+        colored_mask = np.zeros((*pred_mask.shape, 3), dtype=np.uint8)
+        for class_id, color in self.color_map.items():
+            colored_mask[pred_mask == class_id] = color
+        
+        axes[0, 1].imshow(colored_mask)
+        axes[0, 1].set_title('Segmentation Mask', fontsize=14)
+        axes[0, 1].axis('off')
+        
+        # 3. Overlay
+        overlay = cv2.addWeighted(image_array.astype(np.uint8), 0.7, colored_mask, 0.3, 0)
+        axes[0, 2].imshow(overlay)
+        axes[0, 2].set_title('Segmentation Overlay', fontsize=14)
+        axes[0, 2].axis('off')
+        
+        # 4. Cluster Areas Bar Chart
+        bead_names = [comp['name'] for comp in self.bead_compositions]
+        colors = [comp['color'] for comp in self.bead_compositions]
+        
+        bars = axes[1, 0].bar(bead_names, cluster_areas, color=colors, alpha=0.7)
+        axes[1, 0].set_title('Cluster Areas (pixels)', fontsize=14)
+        axes[1, 0].set_ylabel('Area (pixels)')
+        axes[1, 0].tick_params(axis='x', rotation=45)
+        
+        # Add value labels on bars
+        for bar, area in zip(bars, cluster_areas):
+            height = bar.get_height()
+            axes[1, 0].text(bar.get_x() + bar.get_width()/2., height + max(cluster_areas)*0.01,
+                           f'{area}', ha='center', va='bottom', fontsize=10)
+        
+        # 5. NPK Comparison
+        npk_labels = ['Nitrogen (N)', 'Phosphorus (P)', 'Potassium (K)']
+        x_pos = np.arange(len(npk_labels))
+        width = 0.35
+        
+        bars1 = axes[1, 1].bar(x_pos - width/2, approx_npk, width, 
+                              label='Approximate NPK', alpha=0.7, color='skyblue')
+        bars2 = axes[1, 1].bar(x_pos + width/2, predicted_npk, width, 
+                              label='Predicted NPK', alpha=0.7, color='lightcoral')
+        
+        axes[1, 1].set_title('NPK Values Comparison', fontsize=14)
+        axes[1, 1].set_ylabel('NPK Value')
+        axes[1, 1].set_xticks(x_pos)
+        axes[1, 1].set_xticklabels(npk_labels)
+        axes[1, 1].legend()
+        
+        # Add value labels
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                axes[1, 1].text(bar.get_x() + bar.get_width()/2., height + max(max(approx_npk), max(predicted_npk))*0.01,
+                               f'{height:.2f}', ha='center', va='bottom', fontsize=9)
+        
+        # 6. Bead Composition Information
+        axes[1, 2].axis('off')
+        info_text = "Bead Compositions:\n\n"
+        for i, comp in enumerate(self.bead_compositions):
+            info_text += f"{comp['name']}:\n"
+            info_text += f"  N: {comp['N']}%\n"
+            info_text += f"  P: {comp['P']}%\n"
+            info_text += f"  K: {comp['K']}%\n"
+            info_text += f"  Area: {cluster_areas[i]} pixels\n\n"
+        
+        axes[1, 2].text(0.1, 0.9, info_text, transform=axes[1, 2].transAxes, 
+                       fontsize=11, verticalalignment='top', fontfamily='monospace',
+                       bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.5))
+        axes[1, 2].set_title('Bead Information', fontsize=14)
+        
+        plt.tight_layout()
+        
+        # Convert plot to image
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return Image.open(buf)
+    
+    def get_cluster_areas(self, image_array):
+        """Get cluster areas from segmentation masks."""
+        pred_mask, rgb_image = self._get_segmentation_mask(image_array)
+        
+        cluster_areas = []
+        masks_with_index = []
+        
+        # Get masks for classes 1 to 4 (assuming 4 bead types)
+        for class_id in range(1, min(self.NUM_CLASSES, 5)):
+            class_mask = (pred_mask == class_id)
+            masks_with_index.append((class_mask, class_id))
+        
+        # Sort by predicted class index
+        masks_with_index.sort(key=lambda x: x[1])
+        
+        # Calculate areas
+        for mask, class_id in masks_with_index:
+            area = int(np.sum(mask))
+            cluster_areas.append(area)
+        
+        # Pad with zeros if we have fewer than 4 classes
+        while len(cluster_areas) < 4:
+            cluster_areas.append(0)
+        
+        return cluster_areas[:4], pred_mask, rgb_image
+    
+    def calculate_npk(self, cluster_areas):
+        """Calculate NPK values from cluster areas."""
+        npk_total = {'N': 0, 'P': 0, 'K': 0}
+        
+        for i, area in enumerate(cluster_areas):
+            if i < len(self.bead_compositions):
+                for key in npk_total:
+                    npk_total[key] += self.bead_compositions[i][key] * area
+        
+        total_beads = sum(cluster_areas)
+        if total_beads == 0:
+            return [0, 0, 0], [0, 0, 0]
+        
+        approx_npk = [round(npk_total[key] / total_beads, 6) for key in ['N', 'P', 'K']]
+        
+        # Predict using regression model if available
+        if self.regressor is not None:
+            predicted_npk = self.regressor.predict(np.array(approx_npk).reshape(1, -1))
+            return approx_npk, predicted_npk.flatten().tolist()
+        else:
+            return approx_npk, approx_npk
+    
+    def predict_from_image(self, image_array):
+        """Complete NPK prediction pipeline from image array."""
+        try:
+            if image_array is None:
+                return None, "Please upload an image first."
             
-            # Header
-            gr.Markdown("""
-            # 🌱 NPK Soil Analysis System
+            # Get cluster areas and segmentation
+            cluster_areas, pred_mask, rgb_image = self.get_cluster_areas(image_array)
             
-            Upload an image of soil beads to analyze NPK (Nitrogen, Phosphorus, Potassium) content.
-            The system uses a U-Net model for bead segmentation and machine learning for NPK prediction.
+            # Calculate NPK values
+            approx_npk, predicted_npk = self.calculate_npk(cluster_areas)
             
-            **Instructions:**
-            1. Upload a clear image of soil beads
-            2. Choose whether to use GPU acceleration (if available)
-            3. Click "Analyze NPK" to get results
-            """)
-            
-            # Model status
-            with gr.Row():
-                model_status = gr.Textbox(
-                    value=self.initialize_predictor(),
-                    label="Model Status",
-                    interactive=False
-                )
-            
-            # Main interface
-            with gr.Row():
-                with gr.Column(scale=1):
-                    # Input section
-                    gr.Markdown("### 📤 Input")
-                    
-                    image_input = gr.Image(
-                        label="Upload Soil Bead Image",
-                        type="pil",
-                        height=300
-                    )
-                    
-                    use_gpu = gr.Checkbox(
-                        label="Use GPU Acceleration",
-                        value=True,
-                        info="Enable if you have a CUDA-compatible GPU"
-                    )
-                    
-                    analyze_btn = gr.Button(
-                        "🔬 Analyze NPK",
-                        variant="primary",
-                        size="lg"
-                    )
-                    
-                    # Example images section
-                    gr.Markdown("### 📋 Example Images")
-                    gr.Examples(
-                        examples=[
-                            # Add example image paths here if available
-                            # ["examples/sample1.jpg"],
-                            # ["examples/sample2.jpg"],
-                        ],
-                        inputs=[image_input],
-                        label="Try these examples"
-                    )
-                
-                with gr.Column(scale=2):
-                    # Output section
-                    gr.Markdown("### 📊 Results")
-                    
-                    with gr.Row():
-                        with gr.Column():
-                            results_text = gr.Textbox(
-                                label="NPK Analysis Results",
-                                value="Upload an image and click 'Analyze NPK' to see results here.",
-                                lines=20,
-                                max_lines=25,
-                                elem_classes=["output-text"]
-                            )
-                        
-                        with gr.Column():
-                            visualization = gr.Image(
-                                label="Analysis Visualization",
-                                height=400
-                            )
-            
-            # Advanced options (collapsed by default)
-            with gr.Accordion("⚙️ Advanced Options", open=False):
-                gr.Markdown("""
-                **Model Information:**
-                - U-Net model performs bead segmentation into 4 classes
-                - Regression model predicts NPK values from bead areas
-                - GPU acceleration requires CUDA-compatible hardware
-                
-                **Bead Types:**
-                - White beads: High nitrogen content
-                - Stain beads: Medium nitrogen content  
-                - Red beads: High potassium content
-                - Black beads: High phosphorus content
-                """)
-            
-            # Set up the prediction function
-            analyze_btn.click(
-                fn=self.predict_npk_from_image,
-                inputs=[image_input, use_gpu],
-                outputs=[results_text, visualization],
-                show_progress=True
+            # Create visualization
+            viz_image = self.create_visualization_plots(
+                rgb_image, pred_mask, cluster_areas, approx_npk, predicted_npk
             )
             
-            # Footer
-            gr.Markdown("""
-            ---
-            **Note:** This is a research tool. For agricultural decisions, please consult with soil testing professionals.
-            """)
-        
-        return interface
-
-def main():
-    """Main function to run the Gradio app"""
-    app = NPKGradioApp()
-    interface = app.create_interface()
+            # Create detailed results text
+            results_text = self.format_results(cluster_areas, approx_npk, predicted_npk)
+            
+            return viz_image, results_text
+            
+        except Exception as e:
+            error_msg = f"Error in prediction pipeline: {str(e)}"
+            print(error_msg)
+            return None, error_msg
     
-    # Launch the interface
-    interface.launch(
-        server_name="0.0.0.0",  # Allow external access
-        server_port=7860,       # Default Gradio port
-        share=True,            # Set to True to create a public link
-        debug=True,             # Enable debug mode
-        show_error=True,         # Show detailed error messages
-        inbrowser=True  # Auto-open in browser
-    )
+    def format_results(self, cluster_areas, approx_npk, predicted_npk):
+        """Format results as detailed text."""
+        results = []
+        results.append("=== NPK PREDICTION RESULTS ===\n")
+        
+        # Cluster areas
+        results.append("📊 CLUSTER AREAS (pixels):")
+        for i, (area, comp) in enumerate(zip(cluster_areas, self.bead_compositions)):
+            results.append(f"  • {comp['name']}: {area:,} pixels")
+        results.append(f"  • Total: {sum(cluster_areas):,} pixels\n")
+        
+        # Bead compositions
+        results.append("🔬 BEAD COMPOSITIONS:")
+        for comp in self.bead_compositions:
+            results.append(f"  • {comp['name']}: N={comp['N']}%, P={comp['P']}%, K={comp['K']}%")
+        results.append("")
+        
+        # NPK calculations
+        results.append("🧪 NPK CALCULATIONS:")
+        results.append(f"  • Approximate NPK: N={approx_npk[0]:.4f}, P={approx_npk[1]:.4f}, K={approx_npk[2]:.4f}")
+        results.append(f"  • Predicted NPK:   N={predicted_npk[0]:.4f}, P={predicted_npk[1]:.4f}, K={predicted_npk[2]:.4f}")
+        results.append("")
+        
+        dominant_nutrient = ['Nitrogen', 'Phosphorus', 'Potassium'][np.argmax(predicted_npk)]
+        results.append(f"  • Dominant nutrient: {dominant_nutrient}")
+        
+        return "\n".join(results)
 
+# Initialize the predictor
+predictor = NPKPredictorGradio(
+    unet_model_path="checkpoints/best_model.pth",
+    regression_model_path="checkpoints/regression_model.pkl"
+)
+
+# Create Gradio interface
+def create_gradio_interface():
+    """Create the Gradio interface."""
+    
+    with gr.Blocks(title="NPK Prediction System", theme=gr.themes.Soft()) as demo:
+        gr.Markdown("""
+        # 🌱 NPK Prediction System
+        
+        Upload an image of soil test beads to predict NPK (Nitrogen, Phosphorus, Potassium) values.
+        The system uses U-Net for segmentation and regression models for accurate NPK prediction.
+        
+        ## How it works:
+        1. **Image Upload**: Upload your soil test bead image
+        2. **Segmentation**: U-Net model segments different bead types
+        3. **Area Calculation**: Calculate pixel areas for each bead type
+        4. **NPK Prediction**: Predict NPK values using bead compositions and regression model
+        """)
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                # Input section
+                gr.Markdown("### 📤 Input")
+                image_input = gr.Image(
+                    label="Upload Soil Test Bead Image",
+                    type="numpy",
+                    height=300
+                )
+                
+                predict_btn = gr.Button(
+                    "🔍 Analyze Image", 
+                    variant="primary",
+                    size="lg"
+                )
+                
+                # Model info
+                gr.Markdown("""
+                ### ℹ️ Model Information
+                - **Segmentation**: U-Net with 5 classes
+                - **Regression**: Trained on soil test data
+                - **Bead Types**: Black, Red, Brown, White
+                - **Device**: GPU if available, else CPU
+                """)
+            
+            with gr.Column(scale=2):
+                # Output section
+                gr.Markdown("### 📊 Results")
+                
+                # Visualization output
+                viz_output = gr.Image(
+                    label="Analysis Visualization",
+                    type="pil",
+                    height=600
+                )
+                
+                # Text results
+                results_output = gr.Textbox(
+                    label="Detailed Results",
+                    lines=15,
+                    max_lines=20,
+                    show_copy_button=True,
+                    container=True
+                )
+        
+        # Event handlers
+        predict_btn.click(
+            fn=predictor.predict_from_image,
+            inputs=[image_input],
+            outputs=[viz_output, results_output],
+            show_progress=True
+        )
+        
+        # Example section
+        gr.Markdown("""
+        ### 📝 Instructions:
+        1. Take a clear photo of your soil test beads
+        2. Ensure good lighting and contrast
+        3. Upload the image using the interface above
+        4. Click "Analyze Image" to get NPK predictions
+        5. View the detailed visualization and results
+        
+        ### 🎯 Expected Results:
+        - Segmentation mask showing different bead types
+        - Pixel area calculations for each bead type
+        - NPK value predictions with confidence metrics
+        - Detailed analysis and recommendations
+        """)
+        
+        # Footer
+        gr.Markdown("""
+        ---
+        **Note**: This system is designed for educational and research purposes. 
+        For critical agricultural decisions, please consult with soil testing professionals.
+        """)
+    
+    return demo
+
+# Launch the application
 if __name__ == "__main__":
-    main()
+    demo = create_gradio_interface()
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=True,
+        debug=True,
+        inbrowser=True
+    )
