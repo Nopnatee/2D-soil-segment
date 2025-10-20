@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soil-segment"
+version = "0.1.0"
+description = "Segmentation and NPK analysis tools for soil bead imagery."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "Khamics" }
+]
+dependencies = [
+  "gradio",
+  "opencv-python",
+  "numpy",
+  "torch",
+  "torchvision",
+  "matplotlib",
+  "pillow",
+  "joblib",
+  "seaborn",
+  "scikit-learn",
+  "tqdm",
+  "pandas"
+]
+
+[project.optional-dependencies]
+dev = [
+  "nbconvert",
+  "ipykernel"
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
