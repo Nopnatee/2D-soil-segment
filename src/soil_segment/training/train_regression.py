@@ -20,9 +20,9 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import PolynomialFeatures
 from tqdm import tqdm
 
-from .custom_unet import SimpleUNet
+from ..models.unet import SimpleUNet
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 DEFAULT_CHECKPOINT_PATH = ROOT_DIR / "assets" / "checkpoints" / "best_model.pth"
 DEFAULT_OUTPUT_MODEL = ROOT_DIR / "assets" / "checkpoints" / "regression_model.pkl"
 

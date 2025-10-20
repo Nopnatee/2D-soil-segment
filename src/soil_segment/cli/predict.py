@@ -10,9 +10,9 @@ from PIL import Image
 import joblib
 
 # Import your custom U-Net
-from .custom_unet import SimpleUNet, ConvBlock
+from ..models.unet import SimpleUNet, ConvBlock
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 DEFAULT_UNET_PATH = ROOT_DIR / "assets" / "checkpoints" / "best_model.pth"
 DEFAULT_REGRESSION_PATH = ROOT_DIR / "assets" / "checkpoints" / "regression_model.pkl"
 

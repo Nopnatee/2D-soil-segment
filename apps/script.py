@@ -12,4 +12,4 @@ if str(SRC_PATH) not in sys.path:
 
 
 if __name__ == "__main__":
-    run_module("soil_segment.script", run_name="__main__")
+    run_module("soil_segment.cli.predict", run_name="__main__")

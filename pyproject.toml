@@ -37,3 +37,8 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.scripts]
+soil-segment-app = "soil_segment.app.gradio_app:run"
+soil-segment-train-unet = "soil_segment.training.train_unet:main"
+soil-segment-train-regression = "soil_segment.training.train_regression:main"

@@ -23,9 +23,9 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import transforms
 from tqdm import tqdm
 
-from .custom_unet import SimpleUNet
+from ..models.unet import SimpleUNet
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 DEFAULT_CHECKPOINT_DIR = ROOT_DIR / "assets" / "checkpoints"
 
 
