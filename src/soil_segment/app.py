@@ -11,7 +11,7 @@ import io
 import base64
 
 # Import your custom U-Net
-from custom_unet import SimpleUNet, ConvBlock
+from .custom_unet import SimpleUNet, ConvBlock
 
 class NPKPredictorGradio:
     """Enhanced NPK prediction system with visualization for Gradio interface."""
@@ -610,8 +610,8 @@ def create_gradio_interface():
         
         return demo
 
-# Launch the application
-if __name__ == "__main__":
+def run():
+    """Launch the Gradio application."""
     demo = create_gradio_interface()
     demo.launch(
         server_name="0.0.0.0",
@@ -620,3 +620,8 @@ if __name__ == "__main__":
         debug=True,
         inbrowser=True
     )
+
+
+# Launch the application
+if __name__ == "__main__":
+    run()
