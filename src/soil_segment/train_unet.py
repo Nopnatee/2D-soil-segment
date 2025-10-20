@@ -1,42 +1,54 @@
-# %% [markdown] Notebook cell 1
-# # Training Sequence
+"""Training utilities for the SimpleUNet soil segmentation model."""
 
-# %% [code] Notebook cell 2
+from __future__ import annotations
+
+import argparse
+import os
+import random
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Optional, Sequence, Tuple
+
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, Subset
-import numpy as np
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-import os
 from PIL import Image
-import torchvision.transforms as transforms
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
-import seaborn as sns
-from collections import defaultdict
-import time
-import random
+from torch.utils.data import DataLoader, Dataset, Subset
+from torchvision import transforms
+from tqdm import tqdm
 
-# Import your custom U-Net
-from .custom_unet import SimpleUNet, ConvBlock
+from .custom_unet import SimpleUNet
 
-# --- Joint transform class with debug ---
+
+# ---------------------------------------------------------------------------
+# Data pipeline
+# ---------------------------------------------------------------------------
+
+
 class JointTransform:
-    def __init__(self, img_size=256):
+    """Apply the same spatial augmentation to image and mask."""
+
+    def __init__(self, img_size: int = 256):
         self.img_size = img_size
         self.to_tensor = transforms.ToTensor()
-        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                              std=[0.229, 0.224, 0.225])
+        self.normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        )
         self.color_jitter = transforms.ColorJitter(
             brightness=0.2,
             contrast=0.2,
             saturation=0.2,
-            hue=0.05
+            hue=0.05,
         )
 
-    def __call__(self, image, mask):
+    def __call__(self, image: Image.Image, mask: Image.Image) -> Tuple[torch.Tensor, torch.Tensor]:
         # Resize
         image = image.resize((self.img_size, self.img_size), Image.BILINEAR)
         mask = mask.resize((self.img_size, self.img_size), Image.NEAREST)
@@ -64,519 +76,411 @@ class JointTransform:
         image = self.to_tensor(image)
         image = self.normalize(image)
 
-        # Convert mask to tensor long
-        mask = torch.from_numpy(np.array(mask)).long()
+        # Convert mask to long tensor
+        mask_tensor = torch.from_numpy(np.array(mask, copy=True)).long()
 
-        return image, mask
+        return image, mask_tensor
 
 
-# --- Dataset with joint transform ---
 class BeadDataset(Dataset):
-    def __init__(self, image_dir, mask_dir, joint_transform=None, debug=False):
-        self.image_dir = image_dir
-        self.mask_dir = mask_dir
+    """Dataset that returns (image, mask) pairs with optional joint transforms."""
+
+    def __init__(
+        self,
+        image_dir: str | Path,
+        mask_dir: str | Path,
+        joint_transform=None,
+        debug: bool = False,
+    ):
+        self.image_dir = Path(image_dir)
+        self.mask_dir = Path(mask_dir)
         self.joint_transform = joint_transform
         self.debug = debug
-        self.images = [f for f in os.listdir(image_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
+        self.images = sorted(
+            [f for f in os.listdir(self.image_dir) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+        )
 
         if self.debug:
-            print(f"[BeadDataset] Found {len(self.images)} images in {image_dir}")
-            print(f"[BeadDataset] First few images: {self.images[:3]}")
+            print(f"[BeadDataset] Found {len(self.images)} images in {self.image_dir}")
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.images)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         img_name = self.images[idx]
-        img_path = os.path.join(self.image_dir, img_name)
+        img_path = self.image_dir / img_name
 
-        mask_path = os.path.join(self.mask_dir, img_name)
-        if not os.path.exists(mask_path):
-            base_name = os.path.splitext(img_name)[0]
-            for ext in ['.png', '.jpg', '.jpeg']:
-                mask_path = os.path.join(self.mask_dir, base_name + ext)
-                if os.path.exists(mask_path):
+        # Try matching extensions for the mask
+        mask_path = self.mask_dir / img_name
+        if not mask_path.exists():
+            base_name = img_path.stem
+            for ext in (".png", ".jpg", ".jpeg"):
+                candidate = self.mask_dir / f"{base_name}{ext}"
+                if candidate.exists():
+                    mask_path = candidate
                     break
             else:
                 raise FileNotFoundError(f"No mask found for image {img_name} in {self.mask_dir}")
 
-        image = Image.open(img_path).convert('RGB')
+        image = Image.open(img_path).convert("RGB")
         mask = Image.open(mask_path)
 
-        if self.debug and idx < 3:
-            print(f"\n[BeadDataset DEBUG] Sample {idx}:")
-            print(f"Image path: {img_path}")
-            print(f"Mask path: {mask_path}")
-            print(f"Mask mode: {mask.mode}")
-            mask_arr = np.array(mask)
-            print(f"Mask shape: {mask_arr.shape}, dtype: {mask_arr.dtype}")
-            print(f"Mask unique values: {np.unique(mask_arr)}")
-
-        # Convert mask multi-channel to single if needed
         mask_array = np.array(mask)
-        if len(mask_array.shape) > 2:
-            mask_array = mask_array[:, :, 0]
-            mask = Image.fromarray(mask_array.astype(np.uint8), mode='L')
+        if mask_array.ndim == 3:
+            mask = Image.fromarray(mask_array[:, :, 0].astype(np.uint8), mode="L")
 
         if self.joint_transform:
-            image, mask = self.joint_transform(image, mask)
+            image_tensor, mask_tensor = self.joint_transform(image, mask)
         else:
-            # No augmentation fallback
-            image = transforms.ToTensor()(image)
-            image = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                         std=[0.229, 0.224, 0.225])(image)
-            mask = torch.from_numpy(np.array(mask)).long()
+            image_tensor = transforms.ToTensor()(image)
+            image_tensor = transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            )(image_tensor)
+            mask_tensor = torch.from_numpy(np.array(mask, copy=True)).long()
 
-        if self.debug and idx < 3:
-            print(f"[BeadDataset DEBUG] After transform:")
-            print(f"Image tensor shape: {image.shape}, dtype: {image.dtype}")
-            print(f"Mask tensor shape: {mask.shape}, dtype: {mask.dtype}")
-            unique_mask = torch.unique(mask)
-            print(f"Mask unique values: {unique_mask}")
-
-        return image, mask
+        return image_tensor, mask_tensor
 
 
 class DiceScore(nn.Module):
-    """Dice coefficient for segmentation evaluation with debugging"""
-    
-    def __init__(self, num_classes, smooth=1e-6, debug=False):
+    """Dice coefficient for segmentation evaluation."""
+
+    def __init__(self, num_classes: int, smooth: float = 1e-6):
         super().__init__()
         self.num_classes = num_classes
         self.smooth = smooth
-        self.debug = debug
-        self.call_count = 0
-    
-    def forward(self, pred, target):
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred = F.softmax(pred, dim=1)
-        dice_scores = []
-        
-        # Debug first few calls
-        if self.debug and self.call_count < 5:
-            print(f"\n=== DICE DEBUG CALL {self.call_count} ===")
-            print(f"Pred shape: {pred.shape}")
-            print(f"Target shape: {target.shape}")
-            print(f"Target unique values: {torch.unique(target)}")
-            print(f"Target value counts: {torch.bincount(target.flatten())}")
-            
-            # Check prediction distribution
-            pred_classes = torch.argmax(pred, dim=1)
-            print(f"Predicted classes unique: {torch.unique(pred_classes)}")
-            print(f"Predicted classes counts: {torch.bincount(pred_classes.flatten())}")
-        
-        for i in range(self.num_classes):
-            pred_i = pred[:, i]
-            target_i = (target == i).float()
-            
+        dice_scores: list[torch.Tensor] = []
+
+        for class_idx in range(self.num_classes):
+            pred_i = pred[:, class_idx]
+            target_i = (target == class_idx).float()
+
             intersection = (pred_i * target_i).sum()
             union = pred_i.sum() + target_i.sum()
-            
+
             dice = (2 * intersection + self.smooth) / (union + self.smooth)
             dice_scores.append(dice)
-            
-            # Debug class-specific dice
-            if self.debug and self.call_count < 5:
-                print(f"Class {i}: intersection={intersection:.4f}, union={union:.4f}, dice={dice:.4f}")
-        
-        if self.debug and self.call_count < 5:
-            print("=" * 30)
-        
-        self.call_count += 1
+
         return torch.stack(dice_scores).mean()
 
 
-class SqueezeToLong:
-    """Custom transform to replace lambda for multiprocessing compatibility"""
-    def __call__(self, x):
-        return x.squeeze().long()
+# ---------------------------------------------------------------------------
+# Training utilities
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TrainingConfig:
+    data_dir: Path
+    checkpoint_dir: Path = Path("checkpoints")
+    num_classes: int = 5
+    img_size: int = 256
+    batch_size: int = 8
+    epochs: int = 200
+    train_ratio: float = 0.7
+    val_ratio: float = 0.2
+    test_ratio: float = 0.1
+    lr: float = 1e-3
+    weight_decay: float = 1e-4
+    device: Optional[str] = None
+    debug: bool = False
 
 
 class SegmentationTrainer:
-    """Complete training pipeline for SimpleUNet with enhanced debugging"""
-    
-    def __init__(self, model, device, train_loader, val_loader, n_classes=4, debug=False):
+    """High-level training loop for the SimpleUNet model."""
+
+    def __init__(
+        self,
+        model: nn.Module,
+        device: torch.device,
+        train_loader: DataLoader,
+        val_loader: DataLoader,
+        *,
+        n_classes: int,
+        lr: float,
+        weight_decay: float,
+        debug: bool = False,
+    ):
         self.model = model.to(device)
         self.device = device
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.n_classes = n_classes
         self.debug = debug
-        
-        # Ensure model uses GPU efficiently
+
         if torch.cuda.is_available():
-            self.model = self.model.cuda()
             if torch.cuda.device_count() > 1:
                 self.model = nn.DataParallel(self.model)
-        
-        # Loss functions
+
         self.criterion = nn.CrossEntropyLoss()
-        self.dice_metric = DiceScore(n_classes, debug=debug)
-        
-        # Optimizer and scheduler
-        self.optimizer = torch.optim.Adam(
-            model.parameters(), 
-            lr=1e-3, 
-            weight_decay=1e-4
-        )
+        self.dice_metric = DiceScore(n_classes)
+
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, 
-            mode='min', 
-            factor=0.5, 
-            patience=5
+            self.optimizer,
+            mode="min",
+            factor=0.5,
+            patience=5,
         )
-        
-        # Training history
+
         self.history = {
-            'train_loss': [],
-            'val_loss': [],
-            'train_dice': [],
-            'val_dice': [],
-            'lr': []
+            "train_loss": [],
+            "val_loss": [],
+            "train_dice": [],
+            "val_dice": [],
+            "lr": [],
         }
-        
-        # Best model tracking
         self.best_dice = 0.0
-        self.best_model_state = None
-        
-        # Track scheduler events
-        self.previous_lr = self.optimizer.param_groups[0]['lr']
-    
-    def debug_batch(self, data, target, output, batch_idx, phase="train"):
-        """Debug a single batch"""
-        if batch_idx == 0:  # Debug first batch only
-            print(f"\n=== {phase.upper()} BATCH DEBUG ===")
-            print(f"Input shape: {data.shape}")
-            print(f"Target shape: {target.shape}")
-            print(f"Output shape: {output.shape}")
-            print(f"Target unique values: {torch.unique(target)}")
-            print(f"Target value distribution: {torch.bincount(target.flatten())}")
-            
-            # Check model output
-            pred_classes = torch.argmax(output, dim=1)
-            print(f"Predicted classes unique: {torch.unique(pred_classes)}")
-            print(f"Predicted classes distribution: {torch.bincount(pred_classes.flatten())}")
-            
-            # Check if model is predicting only one class
-            pred_probs = F.softmax(output, dim=1)
-            for i in range(self.n_classes):
-                class_prob = pred_probs[:, i].mean()
-                print(f"Class {i} avg probability: {class_prob:.4f}")
-            
-            print("=" * 40)
-    
-    def train_epoch(self):
-        """Train for one epoch with debugging"""
-        self.model.train() 
-        running_loss = 0.0
-        running_dice = 0.0
-        
-        for batch_idx, (data, target) in enumerate(self.train_loader):
-            data, target = data.to(self.device, non_blocking=True), target.to(self.device, non_blocking=True)
-            
-            # Forward pass
-            self.optimizer.zero_grad()
-            output = self.model(data)
-            
-            # Debug first batch
-            if self.debug and batch_idx == 0:
-                self.debug_batch(data, target, output, batch_idx, "train")
-            
-            # Calculate loss
-            loss = self.criterion(output, target)
-            dice = self.dice_metric(output, target)
-            
-            # Backward pass
-            loss.backward()
-            self.optimizer.step()
-            
-            # Update metrics
-            running_loss += loss.item()
-            running_dice += dice.item()
-        
-        avg_loss = running_loss / len(self.train_loader)
-        avg_dice = running_dice / len(self.train_loader)
-        
-        return avg_loss, avg_dice
-    
-    def validate(self):
-        """Validate the model with debugging"""
-        self.model.eval()
-        running_loss = 0.0
-        running_dice = 0.0
-        
-        with torch.no_grad():
-            for batch_idx, (data, target) in enumerate(self.val_loader):
-                data, target = data.to(self.device, non_blocking=True), target.to(self.device, non_blocking=True)
-                
-                output = self.model(data)
-                
-                # Debug first batch
+        self.best_model_state: Optional[dict] = None
+        self.previous_lr = self.optimizer.param_groups[0]["lr"]
+
+    def _debug_batch(self, data: torch.Tensor, target: torch.Tensor, output: torch.Tensor, phase: str) -> None:
+        print(f"\n=== {phase.upper()} BATCH DEBUG ===")
+        print(f"Input shape: {data.shape}")
+        print(f"Target shape: {target.shape}")
+        print(f"Output shape: {output.shape}")
+        print(f"Target unique values: {torch.unique(target)}")
+        pred_classes = torch.argmax(output, dim=1)
+        print(f"Predicted classes unique: {torch.unique(pred_classes)}")
+        print("=" * 40)
+
+    def _step(self, data: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        data = data.to(self.device, non_blocking=True)
+        target = target.to(self.device, non_blocking=True)
+        output = self.model(data)
+        loss = self.criterion(output, target)
+        dice = self.dice_metric(output, target)
+        return loss, dice, output
+
+    def _run_epoch(self, train: bool) -> Tuple[float, float]:
+        loader = self.train_loader if train else self.val_loader
+        total_loss = 0.0
+        total_dice = 0.0
+
+        if train:
+            self.model.train()
+        else:
+            self.model.eval()
+
+        with torch.set_grad_enabled(train):
+            for batch_idx, (data, target) in enumerate(loader):
+                loss, dice, output = self._step(data, target)
+
+                if train:
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+
                 if self.debug and batch_idx == 0:
-                    self.debug_batch(data, target, output, batch_idx, "val")
-                
-                loss = self.criterion(output, target)
-                dice = self.dice_metric(output, target)
-                
-                running_loss += loss.item()
-                running_dice += dice.item()
-        
-        avg_loss = running_loss / len(self.val_loader)
-        avg_dice = running_dice / len(self.val_loader)
-        
-        return avg_loss, avg_dice
-    
-    def train(self, num_epochs, save_dir='checkpoints', print_every=1):
-        """Full training loop with debugging for first 5 epochs only"""
-        os.makedirs(save_dir, exist_ok=True)
-        
-        print(f"Training Config:")
-        print(f"  Device: {self.device}")
-        print(f"  Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
-        print(f"  Epochs: {num_epochs}")
-        print(f"  GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB" if torch.cuda.is_available() else "")
-        print(f"  Classes: {self.n_classes}")
-        print("-" * 60)
-        
+                    self._debug_batch(data, target, output, phase="train" if train else "val")
+
+                total_loss += loss.item()
+                total_dice += dice.item()
+
+        return total_loss / len(loader), total_dice / len(loader)
+
+    def fit(self, epochs: int, checkpoint_dir: Path, print_every: int = 1) -> None:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
         start_time = time.time()
-        
-        for epoch in range(num_epochs):
+
+        print("Training configuration:")
+        print(f"  Device: {self.device}")
+        print(f"  Epochs: {epochs}")
+        print(f"  Parameters: {sum(p.numel() for p in self.model.parameters()):,}")
+        if torch.cuda.is_available():
+            total_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            print(f"  GPU memory: {total_mem:.1f} GB")
+        print("-" * 60)
+
+        for epoch in range(epochs):
             epoch_start = time.time()
-            
-            # Enable debug only for first 5 epochs
-            self.debug = (epoch < 5)
-            self.dice_metric.debug = (epoch < 5)
-            
-            # Training phase
-            train_loss, train_dice = self.train_epoch()
-            
-            # Validation phase
-            val_loss, val_dice = self.validate()
-            
-            # Update learning rate
+
+            train_loss, train_dice = self._run_epoch(train=True)
+            val_loss, val_dice = self._run_epoch(train=False)
+
             self.scheduler.step(val_loss)
-            current_lr = self.optimizer.param_groups[0]['lr']
-            
-            # Check for LR reduction
+            current_lr = self.optimizer.param_groups[0]["lr"]
             lr_reduced = current_lr != self.previous_lr
             if lr_reduced:
                 self.previous_lr = current_lr
-            
-            # Save metrics
-            self.history['train_loss'].append(train_loss)
-            self.history['val_loss'].append(val_loss)
-            self.history['train_dice'].append(train_dice)
-            self.history['val_dice'].append(val_dice)
-            self.history['lr'].append(current_lr)
-            
-            # Save best model
+
+            self.history["train_loss"].append(train_loss)
+            self.history["val_loss"].append(val_loss)
+            self.history["train_dice"].append(train_dice)
+            self.history["val_dice"].append(val_dice)
+            self.history["lr"].append(current_lr)
+
             is_best = val_dice > self.best_dice
             if is_best:
                 self.best_dice = val_dice
-                self.best_model_state = self.model.state_dict().copy()
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': self.model.state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict(),
-                    'best_dice': self.best_dice,
-                    'history': self.history
-                }, os.path.join(save_dir, 'best_model.pth'))
-            
-            # Regular checkpoint every 100 epochs
-            if (epoch + 1) % 100 == 0:
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': self.model.state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict(),
-                    'history': self.history
-                }, os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}.pth'))
-            
-            # Print summary every epoch (or you can keep print_every logic if preferred)
-            epoch_time = time.time() - epoch_start
-            status = ""
-            if is_best:
-                status += " [BEST]"
-            if lr_reduced:
-                status += f" [LR: {current_lr:.6f}]"
-            
-            print(f"Epoch {epoch+1:4d}/{num_epochs} | "
-                f"Train L: {train_loss:.4f} D: {train_dice:.4f} | "
-                f"Val L: {val_loss:.4f} D: {val_dice:.4f} | "
-                f"Time: {epoch_time:.1f}s{status}")
-        
-        total_time = time.time() - start_time
+                self.best_model_state = {k: v.cpu() for k, v in self.model.state_dict().items()}
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "best_dice": self.best_dice,
+                        "history": self.history,
+                    },
+                    checkpoint_dir / "best_model.pth",
+                )
+
+            if (epoch + 1) % print_every == 0:
+                elapsed = time.time() - epoch_start
+                status = ""
+                if is_best:
+                    status += " [BEST]"
+                if lr_reduced:
+                    status += f" [LR {current_lr:.6f}]"
+                print(
+                    f"Epoch {epoch + 1:4d}/{epochs} | "
+                    f"Train L {train_loss:.4f} D {train_dice:.4f} | "
+                    f"Val L {val_loss:.4f} D {val_dice:.4f} | "
+                    f"{elapsed:.1f}s{status}"
+                )
+
+        total_minutes = (time.time() - start_time) / 60
         print("-" * 60)
-        print(f"Training completed in {total_time/60:.1f} minutes")
+        print(f"Training completed in {total_minutes:.1f} minutes")
         print(f"Best validation Dice: {self.best_dice:.4f}")
-        
-        # Load best model
+
         if self.best_model_state is not None:
             self.model.load_state_dict(self.best_model_state)
-            print("Best model loaded.")
+            print("Loaded best validation checkpoint into model.")
 
-    
-    def plot_training_history(self):
-        """Plot training curves"""
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        
-        # Loss curves
-        axes[0, 0].plot(self.history['train_loss'], label='Train Loss')
-        axes[0, 0].plot(self.history['val_loss'], label='Val Loss')
-        axes[0, 0].set_title('Loss Curves')
-        axes[0, 0].set_xlabel('Epoch')
-        axes[0, 0].set_ylabel('Loss')
+    # ------------------------------------------------------------------ #
+    # Optional analysis helpers
+    # ------------------------------------------------------------------ #
+
+    def plot_history(self) -> None:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        axes[0, 0].plot(self.history["train_loss"], label="Train")
+        axes[0, 0].plot(self.history["val_loss"], label="Validation")
+        axes[0, 0].set_title("Loss")
         axes[0, 0].legend()
         axes[0, 0].grid(True)
-        
-        # Dice curves
-        axes[0, 1].plot(self.history['train_dice'], label='Train Dice')
-        axes[0, 1].plot(self.history['val_dice'], label='Val Dice')
-        axes[0, 1].set_title('Dice Score Curves')
-        axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('Dice Score')
+
+        axes[0, 1].plot(self.history["train_dice"], label="Train")
+        axes[0, 1].plot(self.history["val_dice"], label="Validation")
+        axes[0, 1].set_title("Dice score")
         axes[0, 1].legend()
         axes[0, 1].grid(True)
-        
-        # Learning rate
-        axes[1, 0].plot(self.history['lr'])
-        axes[1, 0].set_title('Learning Rate')
-        axes[1, 0].set_xlabel('Epoch')
-        axes[1, 0].set_ylabel('Learning Rate')
-        axes[1, 0].set_yscale('log')
+
+        axes[1, 0].plot(self.history["lr"])
+        axes[1, 0].set_title("Learning rate")
+        axes[1, 0].set_yscale("log")
         axes[1, 0].grid(True)
-        
-        # Combined metrics
-        axes[1, 1].plot(self.history['val_loss'], label='Val Loss', alpha=0.7)
+
+        axes[1, 1].plot(self.history["val_loss"], label="Val loss", alpha=0.7)
         ax2 = axes[1, 1].twinx()
-        ax2.plot(self.history['val_dice'], label='Val Dice', color='orange', alpha=0.7)
-        axes[1, 1].set_title('Validation Metrics')
-        axes[1, 1].set_xlabel('Epoch')
-        axes[1, 1].set_ylabel('Loss', color='blue')
-        ax2.set_ylabel('Dice Score', color='orange')
+        ax2.plot(self.history["val_dice"], label="Val Dice", color="orange", alpha=0.7)
+        axes[1, 1].set_title("Validation metrics")
         axes[1, 1].grid(True)
-        
+
         plt.tight_layout()
         plt.show()
-    
-    def evaluate_model(self, test_loader):
-        """Comprehensive model evaluation"""
+
+    def evaluate(self, loader: DataLoader) -> Tuple[Sequence[int], Sequence[int]]:
         self.model.eval()
-        all_predictions = []
-        all_targets = []
-        
+        predictions: list[int] = []
+        targets: list[int] = []
+
         with torch.no_grad():
-            for data, target in tqdm(test_loader, desc='Evaluating'):
-                data, target = data.to(self.device, non_blocking=True), target.to(self.device, non_blocking=True)
-                
+            for data, target in tqdm(loader, desc="Evaluating"):
+                data = data.to(self.device, non_blocking=True)
+                target = target.to(self.device, non_blocking=True)
+
                 output = self.model(data)
                 pred = torch.argmax(output, dim=1)
-                
-                all_predictions.extend(pred.cpu().numpy().flatten())
-                all_targets.extend(target.cpu().numpy().flatten())
-        
-        # Classification report
-        print("\nClassification Report:")
-        print(classification_report(all_targets, all_predictions))
-        
-        # Confusion matrix
-        cm = confusion_matrix(all_targets, all_predictions)
+
+                predictions.extend(pred.cpu().numpy().flatten())
+                targets.extend(target.cpu().numpy().flatten())
+
+        print("\nClassification report:")
+        print(classification_report(targets, predictions))
+
+        cm = confusion_matrix(targets, predictions)
         plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        plt.title('Confusion Matrix')
-        plt.xlabel('Predicted')
-        plt.ylabel('Actual')
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+        plt.title("Confusion matrix")
+        plt.xlabel("Predicted")
+        plt.ylabel("Actual")
         plt.show()
-        
-        return all_predictions, all_targets
+
+        return predictions, targets
 
 
-class MaskToTensor:
-    """Enhanced mask to tensor conversion with debugging"""
-    def __init__(self, debug=False):
-        self.debug = debug
-        self.call_count = 0
-    
-    def __call__(self, pic):
-        if self.debug and self.call_count < 3:
-            print(f"\n=== MaskToTensor DEBUG {self.call_count} ===")
-            pic_array = np.array(pic)
-            print(f"Input type: {type(pic)}")
-            print(f"Input shape: {pic_array.shape}")
-            print(f"Input dtype: {pic_array.dtype}")
-            print(f"Input min/max: {pic_array.min()}/{pic_array.max()}")
-            print(f"Input unique: {np.unique(pic_array)}")
-            
-            result = torch.from_numpy(pic_array).long()
-            print(f"Output shape: {result.shape}")
-            print(f"Output dtype: {result.dtype}")
-            print(f"Output min/max: {result.min()}/{result.max()}")
-            print(f"Output unique: {torch.unique(result)}")
-            print("=" * 30)
-            
-        self.call_count += 1
-        return torch.from_numpy(np.array(pic)).long()
+# ---------------------------------------------------------------------------
+# High level orchestration
+# ---------------------------------------------------------------------------
 
 
-# --- Updated create_data_loaders with debug ---
-def create_data_loaders(data_dir, batch_size=8, img_size=256,
-                        train_ratio=0.7, val_ratio=0.2, test_ratio=0.1,
-                        random_seed=42, debug=False):
-
-    if abs(train_ratio + val_ratio + test_ratio - 1.0) > 1e-6:
+def create_data_loaders(
+    data_dir: Path,
+    *,
+    img_size: int,
+    batch_size: int,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+    random_seed: int = 42,
+    debug: bool = False,
+) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    if not np.isclose(train_ratio + val_ratio + test_ratio, 1.0):
         raise ValueError("train_ratio + val_ratio + test_ratio must equal 1.0")
+
+    image_dir = data_dir / "images"
+    mask_dir = data_dir / "masks"
+    if not image_dir.exists() or not mask_dir.exists():
+        raise FileNotFoundError(f"Expected 'images' and 'masks' folders under {data_dir}")
 
     random.seed(random_seed)
 
-    train_joint_transform = JointTransform(img_size=img_size)
+    augmentation = JointTransform(img_size=img_size)
 
-    # For val/test: simple resize + tensor + normalize (no augmentation)
-    def val_test_transform(img, msk):
-        img = img.resize((img_size, img_size), Image.BILINEAR)
-        msk = msk.resize((img_size, img_size), Image.NEAREST)
-        img = transforms.ToTensor()(img)
-        img = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                   std=[0.229, 0.224, 0.225])(img)
-        msk = torch.from_numpy(np.array(msk)).long()
-        return img, msk
+    def val_test_transform(image: Image.Image, mask: Image.Image) -> Tuple[torch.Tensor, torch.Tensor]:
+        image = image.resize((img_size, img_size), Image.BILINEAR)
+        mask = mask.resize((img_size, img_size), Image.NEAREST)
+        image_tensor = transforms.ToTensor()(image)
+        image_tensor = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        )(image_tensor)
+        mask_tensor = torch.from_numpy(np.array(mask, copy=True)).long()
+        return image_tensor, mask_tensor
 
-    full_dataset = BeadDataset(
-        os.path.join(data_dir, 'images'),
-        os.path.join(data_dir, 'masks'),
+    base_dataset = BeadDataset(
+        image_dir,
+        mask_dir,
         joint_transform=None,
-        debug=debug
+        debug=debug,
     )
 
-    total_samples = len(full_dataset)
-
+    total_samples = len(base_dataset)
     indices = list(range(total_samples))
     train_size = int(train_ratio * total_samples)
     val_size = int(val_ratio * total_samples)
-    test_size = total_samples - train_size - val_size
 
-    train_indices, temp_indices = train_test_split(indices, train_size=train_size,
-                                                  random_state=random_seed, shuffle=True)
-    val_indices, test_indices = train_test_split(temp_indices, train_size=val_size,
-                                                random_state=random_seed, shuffle=True)
-
-    train_dataset = BeadDataset(
-        os.path.join(data_dir, 'images'),
-        os.path.join(data_dir, 'masks'),
-        joint_transform=train_joint_transform,
-        debug=debug
+    train_indices, temp_indices = train_test_split(
+        indices,
+        train_size=train_size,
+        random_state=random_seed,
+        shuffle=True,
+    )
+    val_indices, test_indices = train_test_split(
+        temp_indices,
+        train_size=val_size,
+        random_state=random_seed,
+        shuffle=True,
     )
 
-    val_dataset = BeadDataset(
-        os.path.join(data_dir, 'images'),
-        os.path.join(data_dir, 'masks'),
-        joint_transform=val_test_transform,
-        debug=False
-    )
-
-    test_dataset = BeadDataset(
-        os.path.join(data_dir, 'images'),
-        os.path.join(data_dir, 'masks'),
-        joint_transform=val_test_transform,
-        debug=False
-    )
+    train_dataset = BeadDataset(image_dir, mask_dir, joint_transform=augmentation, debug=debug)
+    val_dataset = BeadDataset(image_dir, mask_dir, joint_transform=val_test_transform, debug=False)
+    test_dataset = BeadDataset(image_dir, mask_dir, joint_transform=val_test_transform, debug=False)
 
     train_subset = Subset(train_dataset, train_indices)
     val_subset = Subset(val_dataset, val_indices)
@@ -590,351 +494,147 @@ def create_data_loaders(data_dir, batch_size=8, img_size=256,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
     )
     val_loader = DataLoader(
         val_subset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
     )
     test_loader = DataLoader(
         test_subset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
     )
 
-    print(f"Dataset: {total_samples} samples | Train: {len(train_indices)} | Val: {len(val_indices)} | Test: {len(test_indices)}")
+    print(
+        f"Dataset split: total={total_samples} | "
+        f"train={len(train_indices)} | val={len(val_indices)} | test={len(test_indices)}"
+    )
 
     return train_loader, val_loader, test_loader
 
-def print_first_mask_classes(dataset):
-    """Enhanced mask class inspection"""
-    print("\n=== DETAILED MASK INSPECTION ===")
-    
-    # Check first 3 samples
-    for i in range(min(3, len(dataset))):
+
+def inspect_masks(dataset: Dataset, max_samples: int = 3) -> None:
+    print("\nMask statistics preview:")
+    for i in range(min(max_samples, len(dataset))):
         _, mask = dataset[i]
-        
-        if isinstance(mask, torch.Tensor):
-            mask_np = mask.numpy()
-        else:
-            mask_np = np.array(mask)
-            
-        unique_classes = np.unique(mask_np)
-        class_counts = np.bincount(mask_np.flatten())
-        
-        print(f"Sample {i}:")
-        print(f"  Shape: {mask_np.shape}")
-        print(f"  Dtype: {mask_np.dtype}")
-        print(f"  Classes: {unique_classes}")
-        print(f"  Class counts: {class_counts}")
-        print(f"  Min/Max: {mask_np.min()}/{mask_np.max()}")
-        
-        # Check class distribution
-        total_pixels = mask_np.size
-        for class_id in unique_classes:
-            count = class_counts[class_id] if class_id < len(class_counts) else 0
-            percentage = (count / total_pixels) * 100
-            print(f"  Class {class_id}: {count} pixels ({percentage:.1f}%)")
-        print()
-    
-    print("=" * 40)
+        mask_np = mask.numpy() if isinstance(mask, torch.Tensor) else np.array(mask)
+        unique = np.unique(mask_np)
+        counts = np.bincount(mask_np.flatten(), minlength=int(unique.max()) + 1 if unique.size else 0)
+        print(f"Sample {i}: shape={mask_np.shape}, classes={unique}")
+        for class_idx in unique:
+            count = counts[class_idx] if class_idx < len(counts) else 0
+            pct = (count / mask_np.size) * 100
+            print(f"  class {class_idx}: {count} px ({pct:.1f}%)")
+    print("-" * 40)
 
 
-def main():
-    """Main training script with comprehensive debugging"""
-    # Set device and optimize for GPU
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # GPU optimizations
-    if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
-    
-    # Create model (you'll need to define SimpleUNet or import it)
-    model = SimpleUNet(n_classes=5)
-    
-    # Create data loaders with debugging enabled
-    train_loader, val_loader, test_loader = create_data_loaders(
-        data_dir='UNET_dataset',
-        batch_size=8,
-        img_size=256,
-        debug=False  # Enable debugging
-    )
-    
-    # Enhanced mask inspection
-    dataset_for_inspection = train_loader.dataset.dataset
-    print_first_mask_classes(dataset_for_inspection)
-    
-    # Uncomment when you have the model defined
-    trainer = SegmentationTrainer(
-        model=model,
-        device=device,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        n_classes=5,
-        debug=False  # Enable debugging
-    )
-    
-    trainer.train(num_epochs=200, print_every=5)  # Short debug run
-    visualize_prediction(model, train_loader.dataset.dataset, device)
-
-def visualize_prediction(model, dataset, device):
+def visualize_prediction(model: nn.Module, sample: Tuple[torch.Tensor, torch.Tensor], device: torch.device) -> None:
     model.eval()
-    image, mask = dataset[0]
+    image, mask = sample
     image = image.to(device).unsqueeze(0)
 
     with torch.no_grad():
         output = model(image)
         pred = torch.argmax(output, dim=1).squeeze().cpu().numpy()
 
-    fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-    ax[0].imshow(image.squeeze().permute(1, 2, 0).cpu())
-    ax[0].set_title('Image')
-    ax[1].imshow(mask)
-    ax[1].set_title('Ground Truth')
-    ax[2].imshow(pred)
-    ax[2].set_title('Prediction')
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    axes[0].imshow(image.squeeze().permute(1, 2, 0).cpu())
+    axes[0].set_title("Image")
+    axes[1].imshow(mask.cpu() if isinstance(mask, torch.Tensor) else mask)
+    axes[1].set_title("Ground truth")
+    axes[2].imshow(pred)
+    axes[2].set_title("Prediction")
+    for ax in axes:
+        ax.axis("off")
     plt.tight_layout()
     plt.show()
 
+
+def train_unet(config: TrainingConfig) -> SegmentationTrainer:
+    device = torch.device(config.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+
+    train_loader, val_loader, test_loader = create_data_loaders(
+        config.data_dir,
+        img_size=config.img_size,
+        batch_size=config.batch_size,
+        train_ratio=config.train_ratio,
+        val_ratio=config.val_ratio,
+        test_ratio=config.test_ratio,
+        debug=config.debug,
+    )
+
+    inspect_masks(train_loader.dataset.dataset, max_samples=3)  # type: ignore[arg-type]
+
+    model = SimpleUNet(n_classes=config.num_classes)
+    trainer = SegmentationTrainer(
+        model=model,
+        device=device,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        n_classes=config.num_classes,
+        lr=config.lr,
+        weight_decay=config.weight_decay,
+        debug=config.debug,
+    )
+
+    trainer.fit(config.epochs, config.checkpoint_dir)
+    trainer.evaluate(test_loader)
+
+    return trainer
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> TrainingConfig:
+    parser = argparse.ArgumentParser(description="Train the SimpleUNet segmentation model.")
+    parser.add_argument("--data-dir", type=Path, default=Path("UNET_dataset"), help="Dataset root containing images/ and masks/")
+    parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"), help="Directory to store checkpoints")
+    parser.add_argument("--num-classes", type=int, default=5, help="Number of segmentation classes")
+    parser.add_argument("--img-size", type=int, default=256, help="Square image size expected by the network")
+    parser.add_argument("--batch-size", type=int, default=8, help="Mini-batch size")
+    parser.add_argument("--epochs", type=int, default=200, help="Training epochs")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate for Adam optimizer")
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay for Adam optimizer")
+    parser.add_argument("--train-ratio", type=float, default=0.7, help="Portion of dataset for training")
+    parser.add_argument("--val-ratio", type=float, default=0.2, help="Portion of dataset for validation")
+    parser.add_argument("--test-ratio", type=float, default=0.1, help="Portion of dataset for testing")
+    parser.add_argument("--device", type=str, default=None, help="Force device (e.g. 'cuda:0' or 'cpu')")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose debugging output")
+
+    args = parser.parse_args(argv)
+
+    return TrainingConfig(
+        data_dir=args.data_dir,
+        checkpoint_dir=args.checkpoint_dir,
+        num_classes=args.num_classes,
+        img_size=args.img_size,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        train_ratio=args.train_ratio,
+        val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        device=args.device,
+        debug=args.debug,
+    )
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    config = parse_args(argv)
+    train_unet(config)
+
+
 if __name__ == "__main__":
     main()
-
-# %% [markdown] Notebook cell 3
-# # Simple usage
-
-# %% [code] Notebook cell 4
-import torch
-import torchvision.transforms as transforms
-from PIL import Image
-import matplotlib.pyplot as plt
-import numpy as np
-from .custom_unet import SimpleUNet, ConvBlock
-
-NUM_CLASSES = 5
-
-# Load checkpoint and extract weights
-checkpoint = torch.load("checkpoints/best_model.pth", map_location='cuda')
-model = SimpleUNet(in_channels=3, n_classes=5)
-model.load_state_dict(checkpoint['model_state_dict'])
-model.eval()
-model.to('cuda')  # if you're using GPU
-
-
-transform = transforms.Compose([
-    transforms.Resize((256, 256)),  # must match training size
-    transforms.ToTensor(),          # Converts to tensor [0, 1]
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])  # same normalization as training
-])
-
-img = Image.open("regressor_dataset/15-4-20/IMG_0869.jpg").convert("RGB")
-input_tensor = transform(img).unsqueeze(0).to('cuda')  # Add batch dimension
-
-with torch.no_grad():
-    output = model(input_tensor)  # Shape: [1, num_classes, H, W]
-
-# If it's binary segmentation
-if output.shape[1] == 1:
-    pred_mask = torch.sigmoid(output).squeeze().cpu().numpy()
-    pred_mask = (pred_mask > 0.5).astype(np.uint8)
-else:
-    pred_mask = torch.argmax(output, dim=1).squeeze().cpu().numpy()
-
-plt.figure(figsize=(10, 5))
-plt.subplot(1, 2, 1)
-plt.title("Input Image")
-plt.imshow(img)
-
-plt.subplot(1, 2, 2)
-plt.title("Predicted Mask")
-plt.imshow(pred_mask, cmap='gray')  # or a colormap if multiclass
-plt.show()
-
-# %% [markdown] Notebook cell 5
-# # Detailed Visualization 
-
-# %% [code] Notebook cell 6
-import os
-import torch
-import torchvision.transforms as transforms
-from PIL import Image
-import matplotlib.pyplot as plt
-import numpy as np
-from matplotlib.colors import ListedColormap
-from ipywidgets import widgets, VBox, HBox, Output
-from IPython.display import display, clear_output
-from .custom_unet import SimpleUNet
-from scipy import ndimage
-
-# --- Settings ---
-FOLDER_PATH = "regressor_dataset"
-IMG_EXT = ('.jpg', '.jpeg', '.png', '.bmp')
-NUM_CLASSES = 5
-TRANSPARENCY = 0.5
-CLASS_NAMES = ['Background', 'Class 1', 'Class 2', 'Class 3', 'Class 4']
-COLORS = ["#00700F", "#411F1F", "#FF4040", "#FFDD1A", "#75F6FF"]
-colormap = ListedColormap(COLORS[:NUM_CLASSES])
-
-# --- Load Model ---
-checkpoint = torch.load("checkpoints/best_model.pth", map_location='cuda')
-model = SimpleUNet(in_channels=3, n_classes=5)
-model.load_state_dict(checkpoint['model_state_dict'])
-model.eval().to('cuda')
-
-transform = transforms.Compose([
-    transforms.Resize((256, 256)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
-])
-
-dummy = torch.randn(1, 3, 256, 256).to('cuda')
-with torch.no_grad():
-    _ = model(dummy)
-
-
-# --- Get image paths ---
-def get_image_paths(folder):
-    return [
-        os.path.join(root, fname)
-        for root, _, files in os.walk(folder)
-        for fname in files
-        if fname.lower().endswith(IMG_EXT)
-    ]
-
-image_paths = get_image_paths(FOLDER_PATH)
-current_index = 0
-
-# --- Plotting Logic ---
-out = Output()
-
-def visualize(index):
-    img_path = image_paths[index]
-    img = Image.open(img_path).convert("RGB")
-    resized_img = img.resize((256, 256))
-    input_tensor = transform(resized_img).unsqueeze(0).to('cuda')
-
-    with torch.no_grad():
-        output = model(input_tensor)
-
-    if output.shape[1] == 1:
-        pred_mask = torch.sigmoid(output).squeeze().cpu().numpy()
-        pred_mask_binary = (pred_mask > 0.5).astype(np.uint8)
-        confidence_map = pred_mask
-    else:
-        softmax_output = torch.softmax(output, dim=1)
-        pred_mask_binary = torch.argmax(output, dim=1).squeeze().cpu().numpy()
-        confidence_map = torch.max(softmax_output, dim=1)[0].squeeze().cpu().numpy()
-
-    with out:
-        clear_output(wait=True)
-        fig = plt.figure(figsize=(20, 10))
-        fig.suptitle(f"{os.path.basename(img_path)} ({index + 1}/{len(image_paths)})", fontsize=16)
-
-        # Original image
-        plt.subplot(2, 4, 1)
-        plt.title("Original")
-        plt.imshow(resized_img)
-        plt.axis('off')
-
-        # Segmentation mask
-        plt.subplot(2, 4, 2)
-        plt.title("Segmentation")
-        plt.imshow(pred_mask_binary, cmap=colormap, vmin=0, vmax=NUM_CLASSES-1)
-        plt.axis('off')
-
-        # Confidence map
-        plt.subplot(2, 4, 3)
-        plt.title("Confidence")
-        plt.imshow(confidence_map, cmap='viridis', vmin=0, vmax=1)
-        plt.colorbar()
-        plt.axis('off')
-
-        # Overlay
-        plt.subplot(2, 4, 4)
-        plt.title("Overlay")
-        plt.imshow(resized_img)
-        overlay = np.zeros((*pred_mask_binary.shape, 4))
-        for class_idx in range(NUM_CLASSES):
-            mask = pred_mask_binary == class_idx
-            if np.any(mask):
-                color = plt.cm.get_cmap(colormap)(class_idx)
-                overlay[mask] = [color[0], color[1], color[2], TRANSPARENCY]
-        plt.imshow(overlay)
-        plt.axis('off')
-
-        # Class distribution
-        plt.subplot(2, 4, 5)
-        unique, counts = np.unique(pred_mask_binary, return_counts=True)
-        class_percentages = counts / pred_mask_binary.size * 100
-        bars = plt.bar(unique, class_percentages, color=[COLORS[i] for i in unique])
-        plt.title("Class Distribution")
-        plt.xticks(unique, [CLASS_NAMES[i] for i in unique], rotation=45)
-        for bar, perc in zip(bars, class_percentages):
-            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{perc:.1f}%', ha='center', va='bottom')
-
-        # Edge map
-        plt.subplot(2, 4, 6)
-        plt.title("Edges")
-        edges = ndimage.sobel(pred_mask_binary.astype(float))
-        plt.imshow(edges, cmap='gray')
-        plt.axis('off')
-
-        # Confidence histogram
-        plt.subplot(2, 4, 7)
-        plt.title("Confidence Histogram")
-        plt.hist(confidence_map.flatten(), bins=50, color='skyblue', edgecolor='black')
-        plt.axvline(confidence_map.mean(), color='red', linestyle='--',
-                    label=f'Mean: {confidence_map.mean():.3f}')
-        plt.legend()
-
-        # Summary
-        plt.subplot(2, 4, 8)
-        plt.axis('off')
-        summary_text = f"""
-        Size: {resized_img.size}
-        Mean Conf: {confidence_map.mean():.3f}
-        Std: {confidence_map.std():.3f}
-        Min: {confidence_map.min():.3f}
-        Max: {confidence_map.max():.3f}
-        """
-        for i, (class_idx, count) in enumerate(zip(unique, counts)):
-            percentage = count / pred_mask_binary.size * 100
-            summary_text += f"{CLASS_NAMES[class_idx]}: {percentage:.1f}%\n"
-
-        plt.text(0.05, 0.95, summary_text, va='top', fontsize=10, fontfamily='monospace')
-
-        plt.tight_layout()
-        plt.show()
-
-# --- Widget Controls ---
-btn_prev = widgets.Button(description="⟵ Previous")
-btn_next = widgets.Button(description="Next ⟶")
-dropdown = widgets.Dropdown(options=[(os.path.basename(p), i) for i, p in enumerate(image_paths)],
-                            description='Image:')
-
-def on_prev_clicked(b):
-    dropdown.value = (dropdown.value - 1) % len(image_paths)
-
-def on_next_clicked(b):
-    dropdown.value = (dropdown.value + 1) % len(image_paths)
-
-def on_dropdown_change(change):
-    if change['name'] == 'value':
-        visualize(change['new'])
-
-btn_prev.on_click(on_prev_clicked)
-btn_next.on_click(on_next_clicked)
-dropdown.observe(on_dropdown_change)
-
-controls = HBox([btn_prev, dropdown, btn_next])
-display(VBox([controls, out]))
-
-visualize(current_index)
-
