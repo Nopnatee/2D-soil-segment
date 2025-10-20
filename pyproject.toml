@@ -23,7 +23,8 @@ dependencies = [
   "seaborn",
   "scikit-learn",
   "tqdm",
-  "pandas"
+  "pandas",
+  "albumentations>=1.4.0"
 ]
 
 [project.optional-dependencies]

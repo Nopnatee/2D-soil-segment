@@ -20,7 +20,9 @@ from PIL import Image
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, Subset
-from torchvision import transforms
+# from torchvision import transforms  # no longer used; Albumentations handles transforms
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
 
 from ..models.unet import SimpleUNet
@@ -34,55 +36,60 @@ DEFAULT_CHECKPOINT_DIR = ROOT_DIR / "assets" / "checkpoints"
 # ---------------------------------------------------------------------------
 
 
-class JointTransform:
-    """Apply the same spatial augmentation to image and mask."""
+def _square_symmetry_or_equivalent(p: float = 1.0):
+    """Use A.SquareSymmetry if available, else approximate with flips/rotations."""
+    if hasattr(A, "SquareSymmetry"):
+        return A.SquareSymmetry(p=p)  # type: ignore[attr-defined]
+    # Fallback approximation: one of common 2D symmetries
+    return A.OneOf([
+        A.RandomRotate90(p=1.0),
+        A.HorizontalFlip(p=1.0),
+        A.VerticalFlip(p=1.0),
+        A.Transpose(p=1.0),
+    ], p=p)
 
-    def __init__(self, img_size: int = 256):
-        self.img_size = img_size
-        self.to_tensor = transforms.ToTensor()
-        self.normalize = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        )
-        self.color_jitter = transforms.ColorJitter(
-            brightness=0.2,
-            contrast=0.2,
-            saturation=0.2,
-            hue=0.05,
-        )
+
+def build_train_augmentations(img_size: int) -> A.Compose:
+    """Albumentations pipeline matching the provided example."""
+    return A.Compose([
+        # Resize shortest side to 2x target size, keep aspect
+        A.SmallestMaxSize(max_size=img_size * 2, p=1.0),
+        # Random crop to target size
+        A.RandomCrop(height=img_size, width=img_size, p=1.0),
+        # Apply one of 8 random symmetries (flips/rotations)
+        _square_symmetry_or_equivalent(p=1.0),
+        # Image-only transforms
+        A.RandomBrightnessContrast(p=0.3),
+        # Gauss noise; Albumentations uses var_limit instead of std_range
+        A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
+        # Framework-specific steps
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+        ToTensorV2(),
+    ])
+
+
+def build_eval_augmentations(img_size: int) -> A.Compose:
+    """Deterministic resize+normalize for validation/test."""
+    return A.Compose([
+        A.Resize(img_size, img_size),
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+        ToTensorV2(),
+    ])
+
+
+class AlbumentationsJointTransform:
+    """Wrap an Albumentations pipeline to return PyTorch tensors for image and mask."""
+
+    def __init__(self, pipeline: A.Compose):
+        self.pipeline = pipeline
 
     def __call__(self, image: Image.Image, mask: Image.Image) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Resize
-        image = image.resize((self.img_size, self.img_size), Image.BILINEAR)
-        mask = mask.resize((self.img_size, self.img_size), Image.NEAREST)
-
-        # Random horizontal flip
-        if random.random() > 0.5:
-            image = image.transpose(Image.FLIP_LEFT_RIGHT)
-            mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
-
-        # Random vertical flip
-        if random.random() > 0.5:
-            image = image.transpose(Image.FLIP_TOP_BOTTOM)
-            mask = mask.transpose(Image.FLIP_TOP_BOTTOM)
-
-        # Random rotation
-        angle = random.uniform(-10, 10)
-        image = image.rotate(angle, resample=Image.BILINEAR, fillcolor=(0, 0, 0))
-        mask = mask.rotate(angle, resample=Image.NEAREST, fillcolor=0)
-
-        # Random color jitter
-        if random.random() > 0.5:
-            image = self.color_jitter(image)
-
-        # Convert to tensor and normalize image
-        image = self.to_tensor(image)
-        image = self.normalize(image)
-
-        # Convert mask to long tensor
-        mask_tensor = torch.from_numpy(np.array(mask, copy=True)).long()
-
-        return image, mask_tensor
+        image_np = np.array(image)
+        mask_np = np.array(mask)
+        transformed = self.pipeline(image=image_np, mask=mask_np)
+        image_tensor: torch.Tensor = transformed["image"]
+        mask_tensor: torch.Tensor = transformed["mask"].long()
+        return image_tensor, mask_tensor
 
 
 class BeadDataset(Dataset):
@@ -135,12 +142,9 @@ class BeadDataset(Dataset):
         if self.joint_transform:
             image_tensor, mask_tensor = self.joint_transform(image, mask)
         else:
-            image_tensor = transforms.ToTensor()(image)
-            image_tensor = transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
-            )(image_tensor)
-            mask_tensor = torch.from_numpy(np.array(mask, copy=True)).long()
+            # Default to simple resize+normalize using Albumentations eval pipeline
+            eval_tf = AlbumentationsJointTransform(build_eval_augmentations(256))
+            image_tensor, mask_tensor = eval_tf(image, mask)
 
         return image_tensor, mask_tensor
 
@@ -443,18 +447,9 @@ def create_data_loaders(
 
     random.seed(random_seed)
 
-    augmentation = JointTransform(img_size=img_size)
+    augmentation = AlbumentationsJointTransform(build_train_augmentations(img_size))
 
-    def val_test_transform(image: Image.Image, mask: Image.Image) -> Tuple[torch.Tensor, torch.Tensor]:
-        image = image.resize((img_size, img_size), Image.BILINEAR)
-        mask = mask.resize((img_size, img_size), Image.NEAREST)
-        image_tensor = transforms.ToTensor()(image)
-        image_tensor = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        )(image_tensor)
-        mask_tensor = torch.from_numpy(np.array(mask, copy=True)).long()
-        return image_tensor, mask_tensor
+    eval_tf = AlbumentationsJointTransform(build_eval_augmentations(img_size))
 
     base_dataset = BeadDataset(
         image_dir,
@@ -482,8 +477,8 @@ def create_data_loaders(
     )
 
     train_dataset = BeadDataset(image_dir, mask_dir, joint_transform=augmentation, debug=debug)
-    val_dataset = BeadDataset(image_dir, mask_dir, joint_transform=val_test_transform, debug=False)
-    test_dataset = BeadDataset(image_dir, mask_dir, joint_transform=val_test_transform, debug=False)
+    val_dataset = BeadDataset(image_dir, mask_dir, joint_transform=eval_tf, debug=False)
+    test_dataset = BeadDataset(image_dir, mask_dir, joint_transform=eval_tf, debug=False)
 
     train_subset = Subset(train_dataset, train_indices)
     val_subset = Subset(val_dataset, val_indices)
