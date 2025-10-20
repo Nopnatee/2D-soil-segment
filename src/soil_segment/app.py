@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import gradio as gr
 import cv2
 import numpy as np
@@ -13,14 +15,24 @@ import base64
 # Import your custom U-Net
 from .custom_unet import SimpleUNet, ConvBlock
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_UNET_PATH = ROOT_DIR / "assets" / "checkpoints" / "best_model.pth"
+DEFAULT_REGRESSION_PATH = ROOT_DIR / "assets" / "checkpoints" / "regression_model.pkl"
+
+
 class NPKPredictorGradio:
     """Enhanced NPK prediction system with visualization for Gradio interface."""
     
     def __init__(self, 
-                 unet_model_path="checkpoints/best_model.pth",
-                 regression_model_path="checkpoints/regression_model.pkl",
+                 unet_model_path=None,
+                 regression_model_path=None,
                  num_classes=5):
         """Initialize the NPK Predictor with model paths."""
+        if unet_model_path is None:
+            unet_model_path = DEFAULT_UNET_PATH
+        if regression_model_path is None:
+            regression_model_path = DEFAULT_REGRESSION_PATH
+
         self.NUM_CLASSES = num_classes
         self.DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
         
@@ -343,10 +355,7 @@ class NPKPredictorGradio:
         return "\n".join(results)
 
 # Initialize the predictor
-predictor = NPKPredictorGradio(
-    unet_model_path="checkpoints/best_model.pth",
-    regression_model_path="checkpoints/regression_model.pkl"
-)
+predictor = NPKPredictorGradio()
 
 # Create custom CSS for styling
 custom_css = """

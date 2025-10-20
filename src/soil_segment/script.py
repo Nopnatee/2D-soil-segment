@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import cv2
 import numpy as np
 import torch
@@ -10,15 +12,24 @@ import joblib
 # Import your custom U-Net
 from .custom_unet import SimpleUNet, ConvBlock
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_UNET_PATH = ROOT_DIR / "assets" / "checkpoints" / "best_model.pth"
+DEFAULT_REGRESSION_PATH = ROOT_DIR / "assets" / "checkpoints" / "regression_model.pkl"
+
 
 class NPKPredictor:
     """Simplified NPK prediction system using U-Net for segmentation and regression model for NPK estimation."""
     
     def __init__(self, 
-                 unet_model_path="checkpoints/best_model.pth",
-                 regression_model_path="checkpoints/regression_model.pkl",
+                 unet_model_path=None,
+                 regression_model_path=None,
                  num_classes=5):
         """Initialize the NPK Predictor with model paths."""
+        if unet_model_path is None:
+            unet_model_path = DEFAULT_UNET_PATH
+        if regression_model_path is None:
+            regression_model_path = DEFAULT_REGRESSION_PATH
+
         self.NUM_CLASSES = num_classes
         self.DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
         
@@ -195,10 +206,7 @@ class NPKPredictor:
 # Example usage:
 if __name__ == "__main__":
     # Initialize the predictor
-    predictor = NPKPredictor(
-        unet_model_path="checkpoints/best_model.pth",
-        regression_model_path="checkpoints/regression_model.pkl"
-    )
+    predictor = NPKPredictor()
     
     # Make prediction
     image_path = "regressor_dataset/15-4-20/IMG_0869.jpg"

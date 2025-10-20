@@ -22,6 +22,10 @@ from tqdm import tqdm
 
 from .custom_unet import SimpleUNet
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_CHECKPOINT_PATH = ROOT_DIR / "assets" / "checkpoints" / "best_model.pth"
+DEFAULT_OUTPUT_MODEL = ROOT_DIR / "assets" / "checkpoints" / "regression_model.pkl"
+
 
 # ---------------------------------------------------------------------------
 # Configuration data classes
@@ -31,8 +35,8 @@ from .custom_unet import SimpleUNet
 @dataclass
 class RegressionConfig:
     dataset_dir: Path = Path("regressor_dataset")
-    checkpoint_path: Path = Path("checkpoints/best_model.pth")
-    output_model: Path = Path("checkpoints/regression_model.pkl")
+    checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH
+    output_model: Path = DEFAULT_OUTPUT_MODEL
     num_classes: int = 5
     bead_masks: int = 4
     img_size: int = 256
@@ -386,8 +390,8 @@ def run_regression_pipeline(config: RegressionConfig) -> RegressionResult:
 def parse_args(argv: Optional[Sequence[str]] = None) -> RegressionConfig:
     parser = argparse.ArgumentParser(description="Train the NPK regression model.")
     parser.add_argument("--dataset-dir", type=Path, default=Path("regressor_dataset"), help="Directory containing bead image folders")
-    parser.add_argument("--checkpoint-path", type=Path, default=Path("checkpoints/best_model.pth"), help="Path to trained U-Net checkpoint")
-    parser.add_argument("--output-model", type=Path, default=Path("checkpoints/regression_model.pkl"), help="Where to store the trained regressor")
+    parser.add_argument("--checkpoint-path", type=Path, default=DEFAULT_CHECKPOINT_PATH, help="Path to trained U-Net checkpoint")
+    parser.add_argument("--output-model", type=Path, default=DEFAULT_OUTPUT_MODEL, help="Where to store the trained regressor")
     parser.add_argument("--num-classes", type=int, default=5, help="Total segmentation classes (including background)")
     parser.add_argument("--bead-masks", type=int, default=4, help="Number of bead clusters (excludes background)")
     parser.add_argument("--img-size", type=int, default=256, help="Image size expected by the U-Net")

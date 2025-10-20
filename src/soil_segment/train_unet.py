@@ -25,6 +25,9 @@ from tqdm import tqdm
 
 from .custom_unet import SimpleUNet
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_CHECKPOINT_DIR = ROOT_DIR / "assets" / "checkpoints"
+
 
 # ---------------------------------------------------------------------------
 # Data pipeline
@@ -175,7 +178,7 @@ class DiceScore(nn.Module):
 @dataclass
 class TrainingConfig:
     data_dir: Path
-    checkpoint_dir: Path = Path("checkpoints")
+    checkpoint_dir: Path = DEFAULT_CHECKPOINT_DIR
     num_classes: int = 5
     img_size: int = 256
     batch_size: int = 8
@@ -599,7 +602,7 @@ def train_unet(config: TrainingConfig) -> SegmentationTrainer:
 def parse_args(argv: Optional[Sequence[str]] = None) -> TrainingConfig:
     parser = argparse.ArgumentParser(description="Train the SimpleUNet segmentation model.")
     parser.add_argument("--data-dir", type=Path, default=Path("UNET_dataset"), help="Dataset root containing images/ and masks/")
-    parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"), help="Directory to store checkpoints")
+    parser.add_argument("--checkpoint-dir", type=Path, default=DEFAULT_CHECKPOINT_DIR, help="Directory to store checkpoints")
     parser.add_argument("--num-classes", type=int, default=5, help="Number of segmentation classes")
     parser.add_argument("--img-size", type=int, default=256, help="Square image size expected by the network")
     parser.add_argument("--batch-size", type=int, default=8, help="Mini-batch size")

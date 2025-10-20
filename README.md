@@ -9,3 +9,9 @@
 - น้ำตาล/ดำ (Brown/Dark): 18-46-0
 - ขาว (White): 46-0-0
 - ขาวปนน้ำตาล (Off-white): 21-0-0
+
+## Project Structure
+- `apps/`: runnable entry points (UI, CLI, training helpers)
+- `assets/`: model checkpoints and notebooks
+- `src/`: installable `soil_segment` package with core logic
+

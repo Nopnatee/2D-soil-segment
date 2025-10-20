@@ -3,7 +3,7 @@
 from pathlib import Path
 import sys
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_PATH = PROJECT_ROOT / "src"
 
 if str(SRC_PATH) not in sys.path:
