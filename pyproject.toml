@@ -18,7 +18,7 @@ dependencies = [
   "torch",
   "torchvision",
   "matplotlib",
-  "pillow",
+  "Pillow",
   "joblib",
   "seaborn",
   "scikit-learn",
