@@ -11,7 +11,7 @@ import io
 import base64
 
 # Import your custom U-Net
-from custom_unet import SimpleUNet, ConvBlock
+from soil_segment.custom_unet import SimpleUNet, ConvBlock
 
 class NPKPredictorGradio:
     """Enhanced NPK prediction system with visualization for Gradio interface."""

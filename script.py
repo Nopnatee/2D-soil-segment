@@ -8,7 +8,7 @@ from PIL import Image
 import joblib
 
 # Import your custom U-Net
-from custom_unet import SimpleUNet, ConvBlock
+from soil_segment.custom_unet import SimpleUNet, ConvBlock
 
 
 class NPKPredictor:
