@@ -180,15 +180,17 @@ class DiceScore(nn.Module):
         for i in range(self.num_classes):
             pred_i = pred[:, i]
             target_i = (target == i).float()
-            
-            intersection = (pred_i * target_i).sum()
-            union = pred_i.sum() + target_i.sum()
-            
-            dice = (2 * intersection + self.smooth) / (union + self.smooth)
+
+            # Compute Dice without explicitly storing the intersection
+            dice = (
+                2 * (pred_i * target_i).sum() + self.smooth
+            ) / (pred_i.sum() + target_i.sum() + self.smooth)
             dice_scores.append(dice)
-            
+
             if self.debug and self.call_count < 5:
-                print(f"Class {i}: intersection={intersection:.4f}, union={union:.4f}, dice={dice:.4f}")
+                num = (2 * (pred_i * target_i).sum() + self.smooth).item()
+                den = (pred_i.sum() + target_i.sum() + self.smooth).item()
+                print(f"Class {i}: numerator={num:.4f}, denominator={den:.4f}, dice={dice.item():.4f}")
         
         if self.debug and self.call_count < 5:
             print("=" * 30)
@@ -240,11 +242,16 @@ class SegmentationTrainer:
             'val_dice': [],
             'lr': []
         }
-        
+
         # Best model tracking
         self.best_dice = 0.0
         self.best_model_state = None
         self.previous_lr = self.optimizer.param_groups[0]['lr']
+        # Epoch tracking and improvement log
+        self.current_epoch = 0
+        self.best_epoch = None
+        # List of dicts: each time we get a new best, store the epoch and score
+        self.best_dice_progress = []
     
     def debug_batch(self, data, target, output, batch_idx, phase="train"):
         """Debug a single batch"""
@@ -343,6 +350,7 @@ class SegmentationTrainer:
         
         for epoch in range(num_epochs):
             epoch_start = time.time()
+            self.current_epoch = epoch + 1
             
             # Enable debug only for first 5 epochs
             self.debug = (epoch < 5)
@@ -374,12 +382,20 @@ class SegmentationTrainer:
             is_best = val_dice > self.best_dice
             if is_best:
                 self.best_dice = val_dice
+                self.best_epoch = self.current_epoch
                 self.best_model_state = self.model.state_dict().copy()
+                # Log the improvement
+                self.best_dice_progress.append({
+                    'epoch': self.current_epoch,
+                    'val_dice': float(self.best_dice)
+                })
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'best_dice': self.best_dice,
+                    'best_epoch': self.best_epoch,
+                    'best_progress': self.best_dice_progress,
                     'history': self.history
                 }, os.path.join(save_dir, 'best_model.pth'))
             
@@ -405,11 +421,19 @@ class SegmentationTrainer:
                       f"Train L: {train_loss:.4f} D: {train_dice:.4f} | "
                       f"Val L: {val_loss:.4f} D: {val_dice:.4f} | "
                       f"Time: {epoch_time:.1f}s{status}")
+                if is_best:
+                    print(f"  ↳ New best Dice {val_dice:.4f} at epoch {self.current_epoch}")
         
         total_time = time.time() - start_time
         print("-" * 60)
         print(f"Training completed in {total_time/60:.1f} minutes")
         print(f"Best validation Dice: {self.best_dice:.4f}")
+        if self.best_epoch is not None:
+            print(f"Best at epoch: {self.best_epoch}")
+            # Show progression of improvements (epoch -> dice)
+            print("Dice improvements by epoch:")
+            for entry in self.best_dice_progress:
+                print(f"  epoch {entry['epoch']:4d} -> {entry['val_dice']:.4f}")
         
         # Load best model
         if self.best_model_state is not None:
