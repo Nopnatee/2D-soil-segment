@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, Subset, ConcatDataset
+from torch.utils.data import Dataset, DataLoader, Subset
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -23,10 +23,10 @@ class ConvBlock(nn.Module):
         super().__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, 3, padding=1),
-            nn.GroupNorm(8, out_channels),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, 3, padding=1),
-            nn.GroupNorm(8, out_channels),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
 
@@ -145,7 +145,7 @@ class AlbumentationsDataset(Dataset):
         return image, mask.long()
 
 
-def get_training_augmentation(img_size=512):
+def get_training_augmentation(img_size=1024):
     """
     Training augmentation pipeline with Albumentations
     Matches the structure from your image
@@ -280,7 +280,7 @@ class SegmentationTrainer:
             self.optimizer,
             mode='min',
             factor=0.5,
-            patience=5
+            patience=10
         )
 
         # Training history
@@ -566,10 +566,9 @@ class SegmentationTrainer:
         return all_predictions, all_targets
 
 
-def create_data_loaders(data_dir, batch_size=1, img_size=512,
+def create_data_loaders(data_dir, batch_size=4, img_size=1024,
                         train_ratio=0.7, val_ratio=0.2, test_ratio=0.1,
-                        random_seed=42, num_workers=4, debug=False,
-                        augment_repeats=1):
+                        random_seed=42, num_workers=4, debug=False):
     """
     Create data loaders with Albumentations transforms
     """
@@ -632,18 +631,11 @@ def create_data_loaders(data_dir, batch_size=1, img_size=512,
     val_subset = Subset(val_dataset, val_indices)
     test_subset = Subset(test_dataset, test_indices)
 
-    # Optionally repeat/oversample training data to produce multiple
-    # independently augmented variants per image within an epoch
-    if augment_repeats and augment_repeats > 1:
-        train_dataset_effective = ConcatDataset([train_subset] * int(augment_repeats))
-    else:
-        train_dataset_effective = train_subset
-
     # Create data loaders
     pin_memory = torch.cuda.is_available()
 
     train_loader = DataLoader(
-        train_dataset_effective,
+        train_subset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
@@ -672,8 +664,6 @@ def create_data_loaders(data_dir, batch_size=1, img_size=512,
     print(f"\nDataset Statistics:")
     print(f"  Total samples: {total_samples}")
     print(f"  Train: {len(train_indices)} ({train_ratio*100:.1f}%)")
-    if augment_repeats and augment_repeats > 1:
-        print(f"  Augment repeats: x{int(augment_repeats)} -> effective train samples per epoch: {len(train_dataset_effective)}")
     print(f"  Val: {len(val_indices)} ({val_ratio*100:.1f}%)")
     print(f"  Test: {len(test_indices)} ({test_ratio*100:.1f}%)")
     print(f"  Image size: {img_size}x{img_size}")
@@ -758,12 +748,11 @@ def main():
     """Main training script"""
     # Configuration
     IMG_SIZE = 512
-    BATCH_SIZE = 1
+    BATCH_SIZE = 4
     NUM_EPOCHS = 200
     NUM_CLASSES = 8
     DATA_DIR = 'UNET_dataset'
     NUM_WORKERS = 4  # Adjust based on your CPU
-    AUGMENT_REPEATS = 1  # Set >1 to get multiple augmented views per image each epoch
 
     # Set device and optimize for GPU
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -787,8 +776,7 @@ def main():
         val_ratio=0.2,
         test_ratio=0.1,
         num_workers=NUM_WORKERS,
-        debug=False,
-        augment_repeats=AUGMENT_REPEATS
+        debug=False
     )
 
     # Create trainer
@@ -814,3 +802,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
