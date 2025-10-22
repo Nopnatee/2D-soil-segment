@@ -169,11 +169,8 @@ def get_training_augmentation(img_size=1024):
             contrast_limit=0.3,
             p=0.3
         ),
-        A.GaussNoise(
-            var_limit=(10.0, 50.0),
-            mean=0,
-            p=0.2
-        ),
+        # Replace deprecated/arg-mismatch GaussNoise with ISONoise
+        A.ISONoise(p=0.2),
         A.Normalize(
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225],
@@ -802,4 +799,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
