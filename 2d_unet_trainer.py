@@ -333,7 +333,8 @@ class SegmentationTrainer:
         
         return avg_loss, avg_dice
     
-    def train(self, num_epochs, save_dir='checkpoints', print_every=1):
+    def train(self, num_epochs, save_dir='checkpoints', print_every=1,
+              plot_progress=False, plot_interval=1, plot_path='training_curves_latest.png'):
         """Full training loop"""
         os.makedirs(save_dir, exist_ok=True)
         
@@ -407,7 +408,15 @@ class SegmentationTrainer:
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'history': self.history
                 }, os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}.pth'))
-            
+
+            # Optionally save a lightweight curves image during training
+            if plot_progress and ((epoch + 1) % plot_interval == 0):
+                try:
+                    self.save_loss_dice_plot(out_path=plot_path, show=False)
+                except Exception as e:
+                    # Keep training even if plotting fails
+                    print(f"[plot] Skipped live plot at epoch {epoch+1}: {e}")
+
             # Print summary
             if (epoch + 1) % print_every == 0:
                 epoch_time = time.time() - epoch_start
@@ -439,6 +448,38 @@ class SegmentationTrainer:
         if self.best_model_state is not None:
             self.model.load_state_dict(self.best_model_state)
             print("Best model loaded.")
+
+    def save_loss_dice_plot(self, out_path='training_curves.png', show=False):
+        """Save a compact 2-panel plot of Loss and Dice (train vs val)."""
+        epochs = list(range(1, len(self.history['train_loss']) + 1))
+        if not epochs:
+            return
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+        # Loss
+        axes[0].plot(epochs, self.history['train_loss'], label='Train Loss')
+        axes[0].plot(epochs, self.history['val_loss'], label='Val Loss')
+        axes[0].set_title('Loss')
+        axes[0].set_xlabel('Epoch')
+        axes[0].set_ylabel('Loss')
+        axes[0].grid(True)
+        axes[0].legend()
+
+        # Dice
+        axes[1].plot(epochs, self.history['train_dice'], label='Train Dice')
+        axes[1].plot(epochs, self.history['val_dice'], label='Val Dice')
+        axes[1].set_title('Dice')
+        axes[1].set_xlabel('Epoch')
+        axes[1].set_ylabel('Dice Score')
+        axes[1].grid(True)
+        axes[1].legend()
+
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=150)
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
     
     def plot_training_history(self):
         """Plot training curves"""
@@ -746,11 +787,17 @@ def main():
     
     # Train model
     print("Starting training...")
-    trainer.train(num_epochs=NUM_EPOCHS, print_every=1)
+    trainer.train(
+        num_epochs=NUM_EPOCHS,
+        print_every=1,
+        plot_progress=True,            # save live curves during training
+        plot_interval=1,               # save every epoch
+        plot_path='training_curves_latest.png'
+    )
     
-    # Plot training history (optional)
-    # print("\nPlotting training history...")
-    # trainer.plot_training_history()
+    # Plot training history (save and show a full dashboard)
+    print("\nPlotting training history...")
+    trainer.plot_training_history()
     
     # Evaluate on test set
     print("\nEvaluating on test set...")
