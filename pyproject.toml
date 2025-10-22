@@ -23,10 +23,13 @@ dependencies = [
   "gradio",
 ]
 
+[project.scripts]
+soil-segment-train = "soil_segment.trainer:main"
+soil-segment-viz = "soil_segment.visualizer:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["soil_segment*"]
-
