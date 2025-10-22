@@ -209,14 +209,20 @@ class SegmentationTrainer:
         self.val_loader = val_loader
         self.n_classes = n_classes
         self.debug = debug
-        
+
         # Multi-GPU support
         if torch.cuda.is_available():
             self.model = self.model.cuda()
             if torch.cuda.device_count() > 1:
                 print(f"Using {torch.cuda.device_count()} GPUs!")
                 self.model = nn.DataParallel(self.model)
-        
+
+        # Validate model/trainer class alignment early
+        final_conv = self.model.module.final_conv if isinstance(self.model, nn.DataParallel) else self.model.final_conv
+        assert (
+            final_conv.out_channels == self.n_classes
+        ), f"Model outputs {final_conv.out_channels} classes, trainer configured for {self.n_classes}"
+
         # Loss functions
         self.criterion = nn.CrossEntropyLoss()
         self.dice_metric = DiceScore(n_classes, debug=debug)
