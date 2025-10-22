@@ -1,45 +1,35 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "soil-segment"
 version = "0.1.0"
-description = "Segmentation and NPK analysis tools for soil bead imagery."
+description = "2D soil segmentation and NPK prediction"
 readme = "README.md"
 requires-python = ">=3.9"
+license = { text = "Proprietary" }
 authors = [
-  { name = "Khamics" }
+  { name = "Your Name" }
 ]
 dependencies = [
-  "gradio",
-  "opencv-python",
-  "numpy",
   "torch",
   "torchvision",
+  "numpy",
+  "opencv-python",
+  "pillow",
   "matplotlib",
-  "Pillow",
   "joblib",
-  "seaborn",
-  "scikit-learn",
-  "tqdm",
-  "pandas",
-  "albumentations>=1.4.0"
+  "gradio",
 ]
 
-[project.optional-dependencies]
-dev = [
-  "nbconvert",
-  "ipykernel"
-]
+[project.scripts]
+soil-segment-train = "soil_segment.trainer:main"
+soil-segment-viz = "soil_segment.visualizer:main"
 
 [tool.setuptools]
-package-dir = { "" = "src" }
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[project.scripts]
-soil-segment-app = "soil_segment.app.gradio_app:run"
-soil-segment-train-unet = "soil_segment.training.train_unet:main"
-soil-segment-train-regression = "soil_segment.training.train_regression:main"
+include = ["soil_segment*"]
