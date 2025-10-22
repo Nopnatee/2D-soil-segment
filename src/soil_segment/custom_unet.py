@@ -18,7 +18,7 @@ class ConvBlock(nn.Module):
         return self.conv(x)
 
 class SimpleUNet(nn.Module):
-    def __init__(self, in_channels=3, n_classes=8, features=[64, 128, 256, 512]):
+    def __init__(self, in_channels=3, n_classes=7, features=[64, 128, 256, 512]):
         super().__init__()
         self.encoder = nn.ModuleList()
         self.pool = nn.MaxPool2d(2, 2)
@@ -66,7 +66,7 @@ class SimpleUNet(nn.Module):
 # Example usage
 if __name__ == "__main__":
     # Create simplified model
-    model = SimpleUNet(n_classes=5)
+    model = SimpleUNet(n_classes=7)
     
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
@@ -88,7 +88,7 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
     
     # Dummy training step
-    target = torch.randint(0, 4, (2, 256, 256))
+    target = torch.randint(0, 7, (2, 256, 256))
     
     optimizer.zero_grad()
     output = model(x)

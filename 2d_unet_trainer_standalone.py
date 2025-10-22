@@ -747,7 +747,7 @@ def main():
     IMG_SIZE = 512
     BATCH_SIZE = 4
     NUM_EPOCHS = 200
-    NUM_CLASSES = 8
+    NUM_CLASSES = 7
     DATA_DIR = 'UNET_dataset'
     NUM_WORKERS = 4  # Adjust based on your CPU
 
