@@ -1,4 +1,4 @@
-import torch
+﻿import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, Subset
@@ -656,7 +656,7 @@ def main():
     
     # Create data loaders with debugging enabled
     train_loader, val_loader, test_loader = create_data_loaders(
-        data_dir='UNET_dataset',
+        data_dir='datasets/UNET_dataset',
         batch_size=1,
         img_size=512,
         debug=False  # Enable debugging
@@ -700,3 +700,5 @@ def visualize_prediction(model, dataset, device):
 
 if __name__ == "__main__":
     main()
+
+

@@ -1,4 +1,4 @@
-import cv2
+﻿import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -201,10 +201,12 @@ if __name__ == "__main__":
     )
     
     # Make prediction
-    image_path = "regressor_dataset/15-4-20/IMG_0869.jpg"
+    image_path = "datasets/regressor_dataset/15-4-20/IMG_0869.jpg"
     results = predictor.predict_from_image(image_path)
     
     # Access results if needed
     if results:
         print(f"\nCluster areas: {results['cluster_areas']}")
         print(f"Final NPK prediction: {results['predicted_npk']}")
+
+
