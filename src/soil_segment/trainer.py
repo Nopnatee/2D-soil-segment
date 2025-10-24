@@ -1,4 +1,7 @@
-﻿import torch
+import sys
+from pathlib import Path
+
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, Subset
@@ -15,8 +18,12 @@ from collections import defaultdict
 import time
 import random
 
-# Import your custom U-Net
-from .custom_unet import SimpleUNet, ConvBlock
+# Support running as a script or within the package
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
+    from soil_segment.custom_unet import SimpleUNet, ConvBlock
+else:
+    from .custom_unet import SimpleUNet, ConvBlock
 
 # --- Joint transform class with debug ---
 class JointTransform:
@@ -377,8 +384,8 @@ class SegmentationTrainer:
                     'history': self.history
                 }, os.path.join(save_dir, 'best_model.pth'))
             
-            # Regular checkpoint every 100 epochs
-            if (epoch + 1) % 100 == 0:
+            # Regular checkpoint every 50 epochs
+            if (epoch + 1) % 50 == 0:
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': self.model.state_dict(),
@@ -676,7 +683,7 @@ def main():
         debug=False  # Enable debugging
     )
     
-    trainer.train(num_epochs=500, print_every=5)  # Short debug run
+    trainer.train(num_epochs=200, print_every=5)  # Short debug run
     visualize_prediction(model, train_loader.dataset.dataset, device)
 
 def visualize_prediction(model, dataset, device):
@@ -700,5 +707,3 @@ def visualize_prediction(model, dataset, device):
 
 if __name__ == "__main__":
     main()
-
-
