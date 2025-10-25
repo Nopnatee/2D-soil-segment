@@ -1,33 +1,19 @@
-"""Lightweight local image annotator for segmentation masks.
+"""Automated image annotator (model-based pre-labeling).
 
-This tool paints single-channel masks with class IDs that match the
-training pipeline (see `src/soil_segment/trainer.py`). Masks are saved
-under `datasets/` with the same filename as the source image, and can be
-uploaded later using `src/annotations/roboflow_uploader.py`.
+This tool generates single-channel masks with class IDs (0..N-1) using a
+trained segmentation checkpoint. Masks are saved under `datasets/` with
+the same filename as the source image and optional color overlays for
+quick inspection. Uploading (e.g., to Roboflow) is handled separately by
+`src/annotations/roboflow_uploader.py`.
 
-Key goals:
-- Keep class IDs (pixel values) consistent with the trainer (0..N-1).
-- Separate concerns: this module ONLY annotates and saves; uploading is
-  handled by `roboflow_uploader.py`.
-- Simple OpenCV-based UI for brush painting and quick iteration.
-
-Usage examples:
+Example:
   python -m annotations.annotator \
       --input-dir datasets/raw_images \
       --output-dataset datasets/UNET_dataset \
       --num-classes 7 \
-      --class-names Background Sand Clay Silt Rock Water Organic
-
-Controls (interactive mode):
-- Mouse left button: paint with current class
-- Mouse right button: erase to class 0 (background)
-- 0..9 keys: set current class by digit
-- [ / ]: decrease / increase brush size
-- c / v: previous / next class
-- z: undo last stroke
-- s: save mask + overlay
-- n / p: next / previous image
-- q or ESC: quit
+      --class-names Background Sand Clay Silt Rock Water Organic \
+      --checkpoint checkpoints/best_model.pth \
+      --img-size 512 --device cuda
 """
 
 from __future__ import annotations
@@ -36,7 +22,6 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -60,7 +45,6 @@ except ModuleNotFoundError:  # allow running from repo root without install
     if src_path.exists() and str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
     from soil_segment.custom_unet import SimpleUNet  # type: ignore
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -121,187 +105,6 @@ def _render_overlay(image_bgr: np.ndarray, mask: np.ndarray, palette: np.ndarray
         color_mask[mask == cid] = palette[cid]
     overlay = cv2.addWeighted(image_bgr, 1.0 - alpha, color_mask, alpha, 0)
     return overlay
-
-
-@dataclass
-class SessionState:
-    images: List[Path]
-    idx: int
-    brush: int
-    current_class: int
-    num_classes: int
-    class_names: List[str]
-    palette: np.ndarray
-    undo_buffer: Optional[np.ndarray] = None
-
-
-class MaskPainter:
-    def __init__(
-        self,
-        input_dir: Path,
-        output_dataset: Path,
-        num_classes: int,
-        class_names: Optional[List[str]] = None,
-        brush_size: int = 10,
-    ) -> None:
-        self.input_dir = input_dir
-        self.output_dataset = output_dataset
-        self.images_dir, self.masks_dir, self.overlays_dir = _ensure_dirs(output_dataset)
-
-        images = _list_images(input_dir)
-        if not images:
-            raise FileNotFoundError(f"No images found in {input_dir}.")
-
-        if class_names and len(class_names) != num_classes:
-            raise ValueError("Length of --class-names must match --num-classes.")
-
-        self.state = SessionState(
-            images=images,
-            idx=0,
-            brush=max(1, brush_size),
-            current_class=1 if num_classes > 1 else 0,
-            num_classes=num_classes,
-            class_names=class_names or [f"Class {i}" for i in range(num_classes)],
-            palette=_default_palette(num_classes),
-        )
-
-        # Save class metadata for downstream use
-        meta = {
-            "num_classes": num_classes,
-            "class_names": self.state.class_names,
-        }
-        (self.output_dataset / "classes.json").write_text(json.dumps(meta, indent=2))
-
-        cv2.namedWindow("Annotator", cv2.WINDOW_NORMAL)
-        cv2.setMouseCallback("Annotator", self._on_mouse)
-
-        self._load_current()
-
-    # ------------------------------- IO ---------------------------------- #
-    def _img_path(self, idx: int) -> Path:
-        return self.state.images[idx]
-
-    def _mask_path(self, idx: int) -> Path:
-        stem = self._img_path(idx).stem
-        return self.masks_dir / f"{stem}.png"
-
-    def _overlay_path(self, idx: int) -> Path:
-        stem = self._img_path(idx).stem
-        return self.overlays_dir / f"{stem}.png"
-
-    def _load_current(self) -> None:
-        img_path = self._img_path(self.state.idx)
-        image_bgr = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
-        if image_bgr is None:
-            raise RuntimeError(f"Failed to load image: {img_path}")
-        self.image_bgr = image_bgr
-
-        # Copy source image into dataset/images if not already present
-        dst = self.images_dir / img_path.name
-        if not dst.exists():
-            cv2.imwrite(str(dst), image_bgr)
-
-        h, w = image_bgr.shape[:2]
-        mask_path = self._mask_path(self.state.idx)
-        if mask_path.exists():
-            mask = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
-            if mask is None or mask.ndim != 2:
-                # Fallback if saved with color by mistake
-                mask = np.zeros((h, w), dtype=np.uint8)
-        else:
-            mask = np.zeros((h, w), dtype=np.uint8)
-        self.mask = mask.astype(np.uint8)
-        self.state.undo_buffer = None
-
-    def _save_current(self) -> None:
-        # Save mask as single-channel PNG with class IDs
-        cv2.imwrite(str(self._mask_path(self.state.idx)), self.mask)
-        # Save overlay preview for quick browsing
-        overlay = _render_overlay(self.image_bgr, self.mask, self.state.palette)
-        cv2.imwrite(str(self._overlay_path(self.state.idx)), overlay)
-
-    # ----------------------------- Painting ------------------------------- #
-    def _on_mouse(self, event: int, x: int, y: int, flags: int, userdata=None) -> None:
-        if event == cv2.EVENT_LBUTTONDOWN or event == cv2.EVENT_RBUTTONDOWN:
-            self.state.undo_buffer = self.mask.copy()
-
-        if flags & cv2.EVENT_FLAG_LBUTTON:
-            self._paint_at(x, y, self.state.current_class)
-        elif flags & cv2.EVENT_FLAG_RBUTTON:
-            self._paint_at(x, y, 0)
-
-    def _paint_at(self, x: int, y: int, cls: int) -> None:
-        radius = max(1, int(self.state.brush))
-        cv2.circle(self.mask, (x, y), radius, int(cls), thickness=-1)
-
-    # ------------------------------ UI Loop ------------------------------- #
-    def run(self) -> None:  # pragma: no cover - interactive loop
-        while True:
-            vis = _render_overlay(self.image_bgr, self.mask, self.state.palette)
-            self._draw_hud(vis)
-            cv2.imshow("Annotator", vis)
-            key = cv2.waitKey(15) & 0xFF
-
-            if key == 27 or key == ord('q'):  # ESC or q
-                break
-            elif key == ord('s'):
-                self._save_current()
-            elif key == ord('n'):
-                self._next_image()
-            elif key == ord('p'):
-                self._prev_image()
-            elif key == ord('z') and self.state.undo_buffer is not None:
-                self.mask = self.state.undo_buffer
-                self.state.undo_buffer = None
-            elif key == ord('['):
-                self.state.brush = max(1, self.state.brush - 1)
-            elif key == ord(']'):
-                self.state.brush = min(256, self.state.brush + 1)
-            elif key == ord('c'):
-                self.state.current_class = (self.state.current_class - 1) % self.state.num_classes
-            elif key == ord('v'):
-                self.state.current_class = (self.state.current_class + 1) % self.state.num_classes
-            elif key in range(ord('0'), ord('9') + 1):
-                digit = key - ord('0')
-                if digit < self.state.num_classes:
-                    self.state.current_class = digit
-
-        cv2.destroyAllWindows()
-
-    def _next_image(self) -> None:
-        if self.state.idx < len(self.state.images) - 1:
-            self._save_current()
-            self.state.idx += 1
-            self._load_current()
-
-    def _prev_image(self) -> None:
-        if self.state.idx > 0:
-            self._save_current()
-            self.state.idx -= 1
-            self._load_current()
-
-    def _draw_hud(self, vis: np.ndarray) -> None:
-        h, w = vis.shape[:2]
-        y = 24
-        pad = 8
-        # Info text
-        info = (
-            f"[{self.state.idx + 1}/{len(self.state.images)}] "
-            f"Class: {self.state.current_class} ({self.state.class_names[self.state.current_class]})  "
-            f"Brush: {self.state.brush}px  "
-            f"s=save n/p=next/prev [ ]=brush 0-9=set c/v=class z=undo q=quit"
-        )
-        cv2.rectangle(vis, (0, 0), (w, 40), (0, 0, 0), thickness=-1)
-        cv2.putText(vis, info, (pad, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
-
-        # Legend swatches
-        sw = 20
-        for cid in range(min(self.state.num_classes, 10)):
-            color = tuple(int(c) for c in self.state.palette[cid].tolist())
-            x0 = pad + cid * (sw + 6)
-            cv2.rectangle(vis, (x0, 48), (x0 + sw, 48 + sw), color, thickness=-1)
-            cv2.putText(vis, str(cid), (x0 + 4, 48 + sw + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
 
 # ---------------------------------------------------------------------------
 # Automated annotation (model inference)
@@ -438,7 +241,7 @@ def auto_annotate(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Segmentation annotator: automated (default) and interactive modes")
+    p = argparse.ArgumentParser(description="Segmentation annotator: automated model-based pre-labeling")
     p.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR, help="Directory of raw images to annotate.")
     p.add_argument(
         "--output-dataset",
@@ -449,16 +252,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-classes", type=int, default=7, help="Number of classes (IDs 0..N-1).")
     p.add_argument("--class-names", nargs="*", help="Optional class names; must match --num-classes if provided.")
 
-    # Automated options
     p.add_argument("--checkpoint", type=Path, help="Path to trained model checkpoint (.pt/.pth).")
     p.add_argument("--img-size", type=int, default=512, help="Inference size the model expects (square).")
     p.add_argument("--device", type=str, help="cpu or cuda (auto if omitted).")
     p.add_argument("--no-skip-existing", action="store_true", help="Recompute masks even if they exist.")
     p.add_argument("--no-overlays", action="store_true", help="Do not save overlay previews.")
-
-    # Interactive options (fallback)
-    p.add_argument("--interactive", action="store_true", help="Launch manual mask painter UI instead of automation.")
-    p.add_argument("--brush", type=int, default=10, help="Initial brush size in pixels (interactive mode).")
     return p.parse_args()
 
 
@@ -467,17 +265,8 @@ def main(argv: Optional[List[str]] = None) -> None:  # pragma: no cover - entry 
     # Ensure raw input dir exists to guide the user
     args.input_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.interactive or not args.checkpoint:
-        # Launch interactive painter when requested, or when no checkpoint provided
-        painter = MaskPainter(
-            input_dir=args.input_dir,
-            output_dataset=args.output_dataset,
-            num_classes=args.num_classes,
-            class_names=args.class_names,
-            brush_size=args.brush,
-        )
-        painter.run()
-        return
+    if not args.checkpoint:
+        raise SystemExit("--checkpoint is required (manual annotation has been removed).")
 
     # Automated path
     auto_annotate(
