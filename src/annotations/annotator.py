@@ -51,7 +51,7 @@ except ModuleNotFoundError:  # allow running from repo root without install
 # ---------------------------------------------------------------------------
 
 DEFAULT_INPUT_DIR = Path("datasets/raw_images")
-DEFAULT_OUTPUT_DATASET = Path("datasets/annotate")
+DEFAULT_OUTPUT_DATASET = Path("datasets/annotated_dataset")
 
 
 def _default_checkpoint_path() -> Path:
@@ -90,9 +90,6 @@ def _default_palette(n: int) -> np.ndarray:
             [255, 140, 0],    # 4
             [138, 43, 226],   # 5
             [255, 215, 0],    # 6
-            [0, 206, 209],    # 7
-            [205, 92, 92],    # 8
-            [154, 205, 50],   # 9
         ],
         dtype=np.uint8,
     )
