@@ -4,6 +4,7 @@ pictures/
 Learn 2D-Segmentation.ipynb
 *.pth
 *.jpg
+*.png
 .gradio
 UNET_dataset
 regressor_dataset

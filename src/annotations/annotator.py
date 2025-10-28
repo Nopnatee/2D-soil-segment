@@ -9,7 +9,7 @@ quick inspection. Uploading (e.g., to Roboflow) is handled separately by
 Example:
   python -m annotations.annotator \
       --input-dir datasets/raw_images \
-      --output-dataset datasets/UNET_dataset \
+      --output-dataset datasets/annotate \
       --num-classes 7 \
       --class-names Background Sand Clay Silt Rock Water Organic \
       --checkpoint checkpoints/best_model.pth \
@@ -51,7 +51,17 @@ except ModuleNotFoundError:  # allow running from repo root without install
 # ---------------------------------------------------------------------------
 
 DEFAULT_INPUT_DIR = Path("datasets/raw_images")
-DEFAULT_OUTPUT_DATASET = Path("datasets/UNET_dataset")
+DEFAULT_OUTPUT_DATASET = Path("datasets/annotate")
+
+
+def _default_checkpoint_path() -> Path:
+    """Return repo-root-relative default checkpoint path.
+
+    Prefers `checkpoints/best_model.pth` next to the project root regardless
+    of current working directory.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    return repo_root / "checkpoints" / "best_model.pth"
 
 
 def _ensure_dirs(dataset_root: Path) -> Tuple[Path, Path, Path]:
@@ -252,7 +262,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-classes", type=int, default=7, help="Number of classes (IDs 0..N-1).")
     p.add_argument("--class-names", nargs="*", help="Optional class names; must match --num-classes if provided.")
 
-    p.add_argument("--checkpoint", type=Path, help="Path to trained model checkpoint (.pt/.pth).")
+    p.add_argument(
+        "--checkpoint",
+        type=Path,
+        help=(
+            "Path to trained model checkpoint (.pt/.pth). "
+            "If omitted, uses checkpoints/best_model.pth when present."
+        ),
+    )
     p.add_argument("--img-size", type=int, default=512, help="Inference size the model expects (square).")
     p.add_argument("--device", type=str, help="cpu or cuda (auto if omitted).")
     p.add_argument("--no-skip-existing", action="store_true", help="Recompute masks even if they exist.")
@@ -266,7 +283,15 @@ def main(argv: Optional[List[str]] = None) -> None:  # pragma: no cover - entry 
     args.input_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.checkpoint:
-        raise SystemExit("--checkpoint is required (manual annotation has been removed).")
+        default_ckpt = _default_checkpoint_path()
+        if default_ckpt.exists():
+            print(f"[info] Using default checkpoint: {default_ckpt}")
+            args.checkpoint = default_ckpt
+        else:
+            raise SystemExit(
+                "--checkpoint is required (manual annotation has been removed). "
+                "Place a model at checkpoints/best_model.pth or pass --checkpoint."
+            )
 
     # Automated path
     auto_annotate(
