@@ -318,13 +318,56 @@ def _env_or_arg(value: Optional[str], env_key: str) -> str:
     return value or os.getenv(env_key) or ""
 
 
+def _load_env_from_file(path: str = ".env") -> None:
+    """Load simple KEY=VALUE pairs from a .env file into os.environ.
+
+    - Skips lines that are empty or start with '#'.
+    - Does not override variables that are already set in the environment.
+    - Trims surrounding single or double quotes around values.
+    """
+    try:
+        dotenv_path = Path(path)
+        if not dotenv_path.is_file():
+            return
+        for raw in dotenv_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            if (val.startswith("'") and val.endswith("'")) or (
+                val.startswith('"') and val.endswith('"')
+            ):
+                val = val[1:-1]
+            if key and key not in os.environ:
+                os.environ[key] = val
+    except Exception:
+        # Fail silently; env-file loading is a convenience only.
+        return
+
+
 def _parse_cli_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Upload images to Roboflow Annotate.")
     parser.add_argument("--api-key", help="Roboflow API key (env: ROBOFLOW_API_KEY).")
-    parser.add_argument("--workspace", required=True, help="Roboflow workspace slug.")
-    parser.add_argument("--project", required=True, help="Roboflow project slug.")
-    parser.add_argument("--version", help="Dataset version to target (e.g. 1).")
-    parser.add_argument("--path", required=True, help="File or directory to upload.")
+    parser.add_argument(
+        "--workspace",
+        help="Roboflow workspace slug (env: ROBOFLOW_WORKSPACE).",
+    )
+    parser.add_argument(
+        "--project",
+        help="Roboflow project slug (env: ROBOFLOW_PROJECT).",
+    )
+    parser.add_argument(
+        "--version",
+        help="Dataset version to target, e.g. 1 (env: ROBOFLOW_VERSION).",
+    )
+    parser.add_argument(
+        "--path",
+        help="File or directory to upload (env: ROBOFLOW_PATH).",
+    )
     parser.add_argument("--split", default="train", help="Dataset split tag (default: train).")
     parser.add_argument("--batch", help="Optional batch name for the upload.")
     parser.add_argument(
@@ -364,21 +407,41 @@ def _parse_cli_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
+    # Load .env first so environment fallbacks are populated for this process.
+    _load_env_from_file(".env")
+
     args = _parse_cli_args(argv)
-    api_key = _env_or_arg(args.api_key, "ROBOFLOW_API_KEY")
+
+    api_key = _env_or_arg(getattr(args, "api_key", None), "ROBOFLOW_API_KEY")
+    workspace = _env_or_arg(getattr(args, "workspace", None), "ROBOFLOW_WORKSPACE")
+    project = _env_or_arg(getattr(args, "project", None), "ROBOFLOW_PROJECT")
+    version_raw = _env_or_arg(getattr(args, "version", None), "ROBOFLOW_VERSION")
+    path_str = _env_or_arg(getattr(args, "path", None), "ROBOFLOW_PATH")
+
+    missing = []
     if not api_key:
+        missing.append("ROBOFLOW_API_KEY / --api-key")
+    if not workspace:
+        missing.append("ROBOFLOW_WORKSPACE / --workspace")
+    if not project:
+        missing.append("ROBOFLOW_PROJECT / --project")
+    if not path_str:
+        missing.append("ROBOFLOW_PATH / --path")
+    if missing:
         raise ValueError(
-            "API key missing. Provide --api-key or set the ROBOFLOW_API_KEY environment variable."
+            "Missing required configuration: "
+            + ", ".join(missing)
+            + ". Populate .env or pass flags."
         )
 
     annotator = RoboflowAnnotator(
         api_key=api_key,
-        workspace=args.workspace,
-        project=args.project,
-        version=args.version,
+        workspace=workspace,
+        project=project,
+        version=version_raw or None,
     )
 
-    candidate_path = Path(args.path).expanduser()
+    candidate_path = Path(path_str).expanduser()
     metadata = json.loads(args.metadata) if args.metadata else None
     extra_exts = []
     if args.mask_exts:
