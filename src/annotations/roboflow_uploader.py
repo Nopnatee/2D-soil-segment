@@ -25,9 +25,12 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, Optional, Sequence
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 
 DEFAULT_MASK_EXTS: Sequence[str] = (".png", ".jpg", ".jpeg")
+DEFAULT_ANNOTATION_EXTS: Sequence[str] = (".xml", ".txt", ".json", ".jsonl", ".geojson")
 
 
 class RoboflowAnnotator:
@@ -45,18 +48,62 @@ class RoboflowAnnotator:
         timeout: float = 60,
         poll_interval: float = 2.5,
         session: Optional[requests.Session] = None,
+        max_retries: int = 3,
+        retry_backoff: float = 1.0,
     ) -> None:
         if not api_key:
             raise ValueError("Roboflow API key must be provided.")
 
         self.api_key = api_key
-        self.workspace = workspace
-        self.project = project
+
+        workspace_slug = workspace.strip().strip("/")
+        project_slug = project.strip().strip("/")
+
+        if "/" in project_slug:
+            inferred_workspace, inferred_project = project_slug.split("/", 1)
+            if workspace_slug and workspace_slug != inferred_workspace:
+                raise ValueError(
+                    "Workspace mismatch: project parameter encodes a workspace different from --workspace."
+                )
+            workspace_slug = workspace_slug or inferred_workspace
+            project_slug = inferred_project
+
+        if not workspace_slug:
+            raise ValueError("Roboflow workspace slug must be provided.")
+        if not project_slug:
+            raise ValueError("Roboflow project slug must be provided.")
+
+        self.workspace = workspace_slug
+        self.project = project_slug
         self.version = str(version).lstrip("v") if version is not None else None
-        self.dataset_slug = f"{workspace}/{project}"
-        self.timeout = timeout
+        self.dataset_slug = project_slug
+        self.timeout = float(timeout)
         self.poll_interval = poll_interval
         self.session = session or requests.Session()
+
+        self.max_retries = max(0, int(max_retries))
+        self.retry_backoff = max(0.0, float(retry_backoff))
+
+        timeout_connect = max(5.0, min(self.timeout, 30.0))
+        timeout_read = max(5.0, self.timeout)
+        self._timeout_tuple = (timeout_connect, timeout_read)
+
+        retry_config = None
+        if self.max_retries:
+            retry_config = Retry(
+                total=self.max_retries,
+                read=self.max_retries,
+                connect=self.max_retries,
+                status=self.max_retries,
+                backoff_factor=self.retry_backoff,
+                status_forcelist=(429, 500, 502, 503, 504),
+                allowed_methods=("GET", "POST"),
+                raise_on_status=False,
+            )
+
+        adapter = HTTPAdapter(max_retries=retry_config) if retry_config else HTTPAdapter()
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     # --------------------------------------------------------------------- #
     # Public helpers
@@ -72,6 +119,8 @@ class RoboflowAnnotator:
         assignee_email: Optional[str] = None,
         wait_for_processing: bool = True,
         mask_path: Optional[Path | str] = None,
+        annotation_path: Optional[Path | str] = None,
+        annotation_name: Optional[str] = None,
     ) -> Dict[str, object]:
         """Upload a single image to Roboflow using the multipart form endpoint.
 
@@ -84,6 +133,12 @@ class RoboflowAnnotator:
             assignee_email: Roboflow user e-mail to notify for the annotation job.
             wait_for_processing: Poll the API until the upload finishes processing.
             mask_path: Optional path to a segmentation mask paired with the image.
+            annotation_path: Optional path to an external annotation file (e.g.,
+                VOC XML, YOLO TXT, COCO JSON). If provided, this method will
+                attach the annotation to the newly uploaded image via the
+                `/annotate/{image_id}` endpoint.
+            annotation_name: Optional name for the annotation file stored in
+                Roboflow. Defaults to the basename of ``annotation_path``.
 
         Returns:
             The JSON payload describing the upload response.
@@ -116,25 +171,42 @@ class RoboflowAnnotator:
                     "file": (path.name, image_obj, mime_type),
                     "mask": (mask_file_path.name, mask_obj, mask_mime),
                 }
-                response = self.session.post(
-                    url,
-                    params=params,
-                    files=files,
-                    timeout=self.timeout,
-                )
+                try:
+                    response = self.session.post(
+                        url,
+                        params=params,
+                        files=files,
+                        timeout=self._timeout_tuple,
+                    )
+                except requests.exceptions.Timeout as exc:
+                    raise RuntimeError(
+                        f"Roboflow upload timed out after {self.timeout:.0f}s (file={path.name}). "
+                        "Increase --timeout or reduce batch size and retry."
+                    ) from exc
+                except requests.exceptions.RequestException as exc:
+                    raise RuntimeError(f"Roboflow upload request failed for {path.name}: {exc}") from exc
                 data = self._handle_response(response)
         else:
             with path.open("rb") as image_obj:
                 files = {"file": (path.name, image_obj, mime_type)}
-                response = self.session.post(
-                    url,
-                    params=params,
-                    files=files,
-                    timeout=self.timeout,
-                )
+                try:
+                    response = self.session.post(
+                        url,
+                        params=params,
+                        files=files,
+                        timeout=self._timeout_tuple,
+                    )
+                except requests.exceptions.Timeout as exc:
+                    raise RuntimeError(
+                        f"Roboflow upload timed out after {self.timeout:.0f}s (file={path.name}). "
+                        "Use --timeout to increase the limit or retry the upload."
+                    ) from exc
+                except requests.exceptions.RequestException as exc:
+                    raise RuntimeError(f"Roboflow upload request failed for {path.name}: {exc}") from exc
                 data = self._handle_response(response)
 
-        if wait_for_processing and (upload_id := data.get("id") or data.get("upload_id")):
+        upload_id = data.get("id") or data.get("upload_id")
+        if wait_for_processing and upload_id:
             try:
                 processed = self._wait_for_upload(upload_id)
             except RuntimeError:
@@ -142,6 +214,52 @@ class RoboflowAnnotator:
                 processed = None
             if isinstance(processed, dict):
                 data.update(processed)
+
+        # Optionally attach an external annotation file using the annotate endpoint.
+        if annotation_path:
+            # Best-effort resolution of the Roboflow image id.
+            image_id: Optional[str] = None
+            # Common payload shapes include: {"image": {"id": "..."}} or "image_id" keys.
+            image_obj = data.get("image") if isinstance(data, dict) else None
+            if isinstance(image_obj, dict) and isinstance(image_obj.get("id"), str):
+                image_id = image_obj.get("id")
+            elif isinstance(data.get("image_id"), str):  # type: ignore[union-attr]
+                image_id = data.get("image_id")  # type: ignore[assignment]
+            elif isinstance(data.get("imageId"), str):  # type: ignore[union-attr]
+                image_id = data.get("imageId")  # type: ignore[assignment]
+            elif isinstance(upload_id, str):
+                # Upload responses often return the image id in the "id" field.
+                image_id = upload_id
+
+            # If we still don't have an image id but we have an upload id, poll once.
+            if not image_id and upload_id:
+                try:
+                    processed = self._wait_for_upload(str(upload_id))
+                    if isinstance(processed, dict):
+                        data.update(processed)
+                        image_obj = processed.get("image") if isinstance(processed, dict) else None
+                        if isinstance(image_obj, dict) and isinstance(image_obj.get("id"), str):
+                            image_id = image_obj.get("id")
+                        elif isinstance(processed.get("image_id"), str):  # type: ignore[union-attr]
+                            image_id = processed.get("image_id")  # type: ignore[assignment]
+                        elif isinstance(processed.get("imageId"), str):  # type: ignore[union-attr]
+                            image_id = processed.get("imageId")  # type: ignore[assignment]
+                except Exception:
+                    pass
+
+            if not image_id:
+                raise RuntimeError(
+                    "Unable to resolve image_id for annotation upload. Enable wait_for_processing or "
+                    "ensure the upload response includes an image id."
+                )
+
+            ann_resp = self.annotate_uploaded_image(
+                image_id=image_id,
+                annotation_path=annotation_path,
+                annotation_name=annotation_name,
+            )
+            # Include the annotation response in the return payload for visibility.
+            data["annotation"] = ann_resp  # type: ignore[index]
 
         return data
 
@@ -159,6 +277,9 @@ class RoboflowAnnotator:
         mask_directory: Optional[Path | str] = None,
         mask_suffixes: Sequence[str] = DEFAULT_MASK_EXTS,
         allow_missing_masks: bool = False,
+        annotation_directory: Optional[Path | str] = None,
+        annotation_suffixes: Sequence[str] = DEFAULT_ANNOTATION_EXTS,
+        allow_missing_annotations: bool = False,
     ) -> Dict[Path, Dict[str, object]]:
         """Upload every image contained in ``directory``.
 
@@ -174,6 +295,9 @@ class RoboflowAnnotator:
             mask_directory: Directory containing mask images keyed by filename.
             mask_suffixes: Acceptable file extensions for mask lookups.
             allow_missing_masks: When False, raise if a mask cannot be found.
+            annotation_directory: Directory containing per-image annotation files.
+            annotation_suffixes: Acceptable extensions for annotation lookups.
+            allow_missing_annotations: When False, raise if annotation is missing.
 
         Returns:
             Mapping of image path to upload metadata.
@@ -185,6 +309,9 @@ class RoboflowAnnotator:
         pattern = "**/*" if recursive else "*"
         uploads: Dict[Path, Dict[str, object]] = {}
         mask_root = Path(mask_directory).expanduser() if mask_directory else None
+        annotation_root = (
+            Path(annotation_directory).expanduser() if annotation_directory else None
+        )
 
         for image_file in sorted(directory_path.glob(pattern)):
             if image_file.is_dir():
@@ -207,6 +334,19 @@ class RoboflowAnnotator:
                         f"Mask not found for {image_file.name} in {mask_root}"
                     )
 
+            annotation_path = None
+            if annotation_root:
+                annotation_path = self._match_annotation_path(
+                    image_path=image_file,
+                    image_root=directory_path,
+                    annotation_root=annotation_root,
+                    annotation_suffixes=annotation_suffixes,
+                )
+                if not annotation_path and not allow_missing_annotations:
+                    raise FileNotFoundError(
+                        f"Annotation not found for {image_file.name} in {annotation_root}"
+                    )
+
             metadata = metadata_builder(image_file) if metadata_builder else None
             uploads[image_file] = self.upload_image(
                 image_file,
@@ -217,6 +357,7 @@ class RoboflowAnnotator:
                 assignee_email=assignee_email,
                 wait_for_processing=wait_for_processing,
                 mask_path=mask_path,
+                annotation_path=annotation_path,
             )
 
         return uploads
@@ -224,6 +365,95 @@ class RoboflowAnnotator:
     # --------------------------------------------------------------------- #
     # Internal utilities
     # --------------------------------------------------------------------- #
+    def annotate_uploaded_image(
+        self,
+        *,
+        image_id: str,
+        annotation_path: Path | str,
+        annotation_name: Optional[str] = None,
+        job_name: Optional[str] = None,
+        is_prediction: bool = False,
+        overwrite: bool = False,
+        labelmap: Optional[Dict[str, object]] = None,
+    ) -> Dict[str, object]:
+        """Attach an annotation file to an existing uploaded image.
+
+        This calls the Roboflow annotate endpoint:
+            POST /dataset/{project}/annotate/{image_id}
+
+        Args:
+            image_id: Roboflow image identifier returned after processing an upload.
+            annotation_path: Path to the local annotation file (VOC/YOLO/COCO, etc.).
+            annotation_name: Optional storage name for the annotation in Roboflow.
+            job_name: Optional job name label visible in Roboflow Annotate UI.
+            is_prediction: Mark annotations as predictions rather than ground truth.
+            overwrite: Overwrite existing annotation if one already exists.
+            labelmap: Optional label map when sending COCO-like formats.
+
+        Returns:
+            Parsed JSON response of the annotate call.
+        """
+        p = Path(annotation_path).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"Annotation path does not exist: {p}")
+
+        url = f"{self.API_ROOT}/dataset/{self.dataset_slug}/annotate/{image_id}"
+        params = {"api_key": self.api_key, "name": annotation_name or p.name}
+        if job_name:
+            params["jobName"] = job_name
+        if is_prediction:
+            params["prediction"] = "true"
+        if overwrite:
+            params["overwrite"] = "true"
+
+        annotation_string = p.read_text(encoding="utf-8")
+        body_payload = {"annotationFile": annotation_string}
+        if labelmap is not None:
+            body_payload["labelmap"] = labelmap
+
+        try:
+            response = self.session.post(
+                url,
+                params=params,
+                data=json.dumps(body_payload),
+                headers={"Content-Type": "application/json"},
+                timeout=self._timeout_tuple,
+            )
+        except requests.exceptions.Timeout as exc:  # pragma: no cover - network errors
+            raise RuntimeError(
+                f"Roboflow annotate timed out after {self.timeout:.0f}s (annotation={p.name}). "
+                "Increase --timeout or retry the upload."
+            ) from exc
+        except requests.RequestException as exc:  # pragma: no cover - network errors
+            raise RuntimeError(f"Roboflow annotate request failed: {exc}") from exc
+
+        # Inline response handling to allow 409 conflict with a friendly message
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+
+        if response.status_code not in (200, 409) or not payload:
+            body = response.text
+            raise RuntimeError(
+                f"Roboflow annotate failed: HTTP {response.status_code}; response={body}"
+            )
+
+        if response.status_code == 409:
+            # Common case: image already annotated
+            err = (payload or {}).get("error", {}) if isinstance(payload, dict) else {}
+            msg = err.get("message") if isinstance(err, dict) else None
+            if isinstance(msg, str) and "already annotated" in msg.lower():
+                return {"warn": "already annotated"}
+            raise RuntimeError(f"Roboflow annotate conflict: {payload}")
+
+        if isinstance(payload, dict) and payload.get("error"):
+            raise RuntimeError(f"Roboflow annotate error: {payload}")
+        if isinstance(payload, dict) and not payload.get("success", True):
+            raise RuntimeError(f"Roboflow annotate unsuccessful: {payload}")
+
+        return payload if isinstance(payload, dict) else {"result": payload}
+
     def _build_params(
         self,
         *,
@@ -261,20 +491,52 @@ class RoboflowAnnotator:
         mask_suffixes: Sequence[str],
     ) -> Optional[Path]:
         """Resolve a mask path for ``image_path`` within ``mask_root``."""
+        return self._match_related_path(
+            image_path=image_path,
+            image_root=image_root,
+            related_root=mask_root,
+            candidate_suffixes=mask_suffixes,
+        )
+
+    def _match_annotation_path(
+        self,
+        *,
+        image_path: Path,
+        image_root: Path,
+        annotation_root: Path,
+        annotation_suffixes: Sequence[str],
+    ) -> Optional[Path]:
+        """Resolve an annotation path for ``image_path`` within ``annotation_root``."""
+        return self._match_related_path(
+            image_path=image_path,
+            image_root=image_root,
+            related_root=annotation_root,
+            candidate_suffixes=annotation_suffixes,
+        )
+
+    def _match_related_path(
+        self,
+        *,
+        image_path: Path,
+        image_root: Path,
+        related_root: Path,
+        candidate_suffixes: Sequence[str],
+    ) -> Optional[Path]:
+        """Generic helper to match a related file (mask/annotation) for an image."""
         try:
             relative = image_path.relative_to(image_root)
         except ValueError:
             relative = Path(image_path.name)
 
         if relative.parent == Path("."):
-            search_dirs = [mask_root]
+            search_dirs = [related_root]
         else:
-            search_dirs = [mask_root / relative.parent, mask_root]
+            search_dirs = [related_root / relative.parent, related_root]
 
         suffix_candidates = []
         if relative.suffix:
             suffix_candidates.append(relative.suffix)
-        for suffix in mask_suffixes:
+        for suffix in candidate_suffixes:
             if suffix not in suffix_candidates:
                 suffix_candidates.append(suffix)
 
@@ -292,7 +554,18 @@ class RoboflowAnnotator:
         params = {"api_key": self.api_key}
 
         while True:
-            response = self.session.get(status_url, params=params, timeout=self.timeout)
+            try:
+                response = self.session.get(
+                    status_url,
+                    params=params,
+                    timeout=self._timeout_tuple,
+                )
+            except requests.exceptions.Timeout:
+                time.sleep(self.poll_interval)
+                continue
+            except requests.exceptions.RequestException as exc:
+                raise RuntimeError(f"Roboflow status polling failed: {exc}") from exc
+
             payload = self._handle_response(response)
             status = payload.get("status") or payload.get("state")
             if status in {"pending", "processing", "queued"}:
@@ -371,8 +644,36 @@ def _parse_cli_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument("--split", default="train", help="Dataset split tag (default: train).")
     parser.add_argument("--batch", help="Optional batch name for the upload.")
     parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="HTTP timeout (seconds) for Roboflow API requests (default: 60).",
+    )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=None,
+        help="Number of retry attempts for Roboflow API requests (default: 3).",
+    )
+    parser.add_argument(
+        "--retry-backoff",
+        type=float,
+        default=None,
+        help="Exponential backoff factor between retries in seconds (default: 1.0).",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=None,
+        help="Seconds to wait between status checks when waiting for processing (default: 2.5).",
+    )
+    parser.add_argument(
         "--mask",
         help="Mask file to upload alongside --path when uploading a single image.",
+    )
+    parser.add_argument(
+        "--annotation",
+        help="Annotation file to upload alongside --path (single image only).",
     )
     parser.add_argument(
         "--mask-dir",
@@ -388,6 +689,21 @@ def _parse_cli_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--allow-missing-masks",
         action="store_true",
         help="Skip the mask attachment when a matching file cannot be found.",
+    )
+    parser.add_argument(
+        "--annotation-dir",
+        help="Directory containing per-image annotation files that mirror the image filenames.",
+    )
+    parser.add_argument(
+        "--annotation-ext",
+        dest="annotation_exts",
+        action="append",
+        help="Additional annotation extensions to consider (e.g. .xml, .txt).",
+    )
+    parser.add_argument(
+        "--allow-missing-annotations",
+        action="store_true",
+        help="Skip annotation attachment when a matching file cannot be found.",
     )
     parser.add_argument(
         "--assignee",
@@ -434,16 +750,48 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             + ". Populate .env or pass flags."
         )
 
+    timeout_raw = _env_or_arg(
+        str(args.timeout) if getattr(args, "timeout", None) is not None else None,
+        "ROBOFLOW_TIMEOUT",
+    )
+    timeout_value = float(timeout_raw) if timeout_raw else 60.0
+
+    retries_raw = _env_or_arg(
+        str(args.retries) if getattr(args, "retries", None) is not None else None,
+        "ROBOFLOW_RETRIES",
+    )
+    retries_value = int(retries_raw) if retries_raw else 3
+
+    retry_backoff_raw = _env_or_arg(
+        str(args.retry_backoff)
+        if getattr(args, "retry_backoff", None) is not None
+        else None,
+        "ROBOFLOW_RETRY_BACKOFF",
+    )
+    retry_backoff_value = float(retry_backoff_raw) if retry_backoff_raw else 1.0
+
+    poll_interval_raw = _env_or_arg(
+        str(args.poll_interval)
+        if getattr(args, "poll_interval", None) is not None
+        else None,
+        "ROBOFLOW_POLL_INTERVAL",
+    )
+    poll_interval_value = float(poll_interval_raw) if poll_interval_raw else 2.5
+
     annotator = RoboflowAnnotator(
         api_key=api_key,
         workspace=workspace,
         project=project,
         version=version_raw or None,
+        timeout=float(timeout_value),
+        poll_interval=poll_interval_value,
+        max_retries=retries_value,
+        retry_backoff=retry_backoff_value,
     )
 
     candidate_path = Path(path_str).expanduser()
     metadata = json.loads(args.metadata) if args.metadata else None
-    extra_exts = []
+    mask_extra_exts = []
     if args.mask_exts:
         for ext in args.mask_exts:
             if not ext:
@@ -453,8 +801,23 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 continue
             if not cleaned.startswith("."):
                 cleaned = f".{cleaned}"
-            extra_exts.append(cleaned)
-    mask_suffixes = tuple(dict.fromkeys([*DEFAULT_MASK_EXTS, *extra_exts]))
+            mask_extra_exts.append(cleaned)
+    mask_suffixes = tuple(dict.fromkeys([*DEFAULT_MASK_EXTS, *mask_extra_exts]))
+
+    annotation_extra_exts = []
+    if args.annotation_exts:
+        for ext in args.annotation_exts:
+            if not ext:
+                continue
+            cleaned = ext.strip().lower()
+            if not cleaned:
+                continue
+            if not cleaned.startswith("."):
+                cleaned = f".{cleaned}"
+            annotation_extra_exts.append(cleaned)
+    annotation_suffixes = tuple(
+        dict.fromkeys([*DEFAULT_ANNOTATION_EXTS, *annotation_extra_exts])
+    )
 
     if candidate_path.is_dir():
         uploads = annotator.upload_directory(
@@ -468,6 +831,9 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             mask_directory=args.mask_dir,
             mask_suffixes=mask_suffixes,
             allow_missing_masks=args.allow_missing_masks,
+            annotation_directory=args.annotation_dir,
+            annotation_suffixes=annotation_suffixes,
+            allow_missing_annotations=args.allow_missing_annotations,
         )
         for uploaded_path, payload in uploads.items():
             print(f"[{uploaded_path}] -> {payload.get('status', 'done')}")
@@ -487,6 +853,25 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                     f"Mask not found for {candidate_path.name} in {mask_root}"
                 )
 
+        annotation_path = Path(args.annotation).expanduser() if args.annotation else None
+        if not annotation_path and args.annotation_dir:
+            annotation_root = Path(args.annotation_dir).expanduser()
+            annotation_candidate = annotator._match_annotation_path(  # type: ignore[attr-defined]
+                image_path=candidate_path,
+                image_root=candidate_path.parent,
+                annotation_root=annotation_root,
+                annotation_suffixes=annotation_suffixes,
+            )
+            annotation_path = annotation_candidate
+            if (
+                not annotation_path
+                and not args.allow_missing_annotations
+                and args.annotation_dir
+            ):
+                raise FileNotFoundError(
+                    f"Annotation not found for {candidate_path.name} in {annotation_root}"
+                )
+
         payload = annotator.upload_image(
             candidate_path,
             split=args.split,
@@ -494,6 +879,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             metadata=metadata,
             assignee_email=args.assignee,
             mask_path=mask_path,
+            annotation_path=annotation_path,
         )
         print(json.dumps(payload, indent=2))
 
