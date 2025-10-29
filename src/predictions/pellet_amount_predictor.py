@@ -22,6 +22,16 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(src_path))
     from soil_segment.custom_unet import SimpleUNet  # type: ignore
 
+DEFAULT_PELLET_CLASS_NAMES: Tuple[str, ...] = (
+    "background",
+    "Black_DAP",
+    "Red_MOP",
+    "White_AMP",
+    "White_Boron",
+    "White_Mg",
+    "Yellow_Urea",
+)
+
 @dataclass(frozen=True)
 class ClassStat:
     """Container for per-class pellet statistics."""
@@ -81,22 +91,11 @@ def _resolve_class_names(
         except json.JSONDecodeError:
             pass  # Fall back to defaults if classes.json is malformed
 
-    # Friendly defaults for fertilizer pellets
-    defaults = ["Background"]
-    fertiliser_palette = [
-        "Black Pellets",
-        "Red Pellets",
-        "Brown Pellets",
-        "White Pellets",
-        "Pellet Class 5",
-        "Pellet Class 6",
-        "Pellet Class 7",
-        "Pellet Class 8",
-    ]
-
-    for idx in range(1, n_classes):
-        if idx - 1 < len(fertiliser_palette):
-            defaults.append(fertiliser_palette[idx - 1])
+    # Defaults aligned with the current fertilizer pellet taxonomy
+    defaults: List[str] = []
+    for idx in range(n_classes):
+        if idx < len(DEFAULT_PELLET_CLASS_NAMES):
+            defaults.append(DEFAULT_PELLET_CLASS_NAMES[idx])
         else:
             defaults.append(f"Pellet Class {idx}")
     return defaults
