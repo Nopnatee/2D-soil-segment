@@ -69,6 +69,24 @@ class JointTransform:
         return image, mask
 
 
+class ValTestTransform:
+    """Deterministic resize + normalize path for val/test loaders."""
+
+    def __init__(self, img_size=1024):
+        self.img_size = img_size
+        self.to_tensor = transforms.ToTensor()
+        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                              std=[0.229, 0.224, 0.225])
+
+    def __call__(self, image, mask):
+        image = image.resize((self.img_size, self.img_size), Image.BILINEAR)
+        mask = mask.resize((self.img_size, self.img_size), Image.NEAREST)
+        image = self.to_tensor(image)
+        image = self.normalize(image)
+        mask = torch.from_numpy(np.array(mask)).long()
+        return image, mask
+
+
 # --- Dataset with joint transform ---
 class BeadDataset(Dataset):
     def __init__(self, image_dir, mask_dir, joint_transform=None, debug=False):
@@ -528,14 +546,7 @@ def create_data_loaders(data_dir, batch_size=1, img_size=1024,
     train_joint_transform = JointTransform(img_size=img_size)
 
     # For val/test: simple resize + tensor + normalize (no augmentation)
-    def val_test_transform(img, msk):
-        img = img.resize((img_size, img_size), Image.BILINEAR)
-        msk = msk.resize((img_size, img_size), Image.NEAREST)
-        img = transforms.ToTensor()(img)
-        img = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                   std=[0.229, 0.224, 0.225])(img)
-        msk = torch.from_numpy(np.array(msk)).long()
-        return img, msk
+    val_test_transform = ValTestTransform(img_size=img_size)
 
     full_dataset = BeadDataset(
         os.path.join(data_dir, 'images'),
