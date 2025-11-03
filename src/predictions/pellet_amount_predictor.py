@@ -12,14 +12,15 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC_DIR = REPO_ROOT / "src"
+
 try:
     from soil_segment.custom_unet import SimpleUNet
 except ModuleNotFoundError:
     # Support running directly from the repository without `pip install -e .`
-    here = Path(__file__).resolve().parents[1]
-    src_path = here / "src"
-    if src_path.exists() and str(src_path) not in sys.path:
-        sys.path.insert(0, str(src_path))
+    if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
+        sys.path.insert(0, str(SRC_DIR))
     from soil_segment.custom_unet import SimpleUNet  # type: ignore
 
 DEFAULT_PELLET_CLASS_NAMES: Tuple[str, ...] = (
@@ -43,8 +44,11 @@ class ClassStat:
 
 
 def _default_checkpoint_path() -> Path:
-    repo_root = Path(__file__).resolve().parents[1]
-    return repo_root / "checkpoints" / "best_model.pth"
+    return REPO_ROOT / "checkpoints" / "best_model.pth"
+
+
+def _default_image_path() -> Path:
+    return REPO_ROOT / "datasets" / "UNET_dataset" / "images" / "img_001.jpg"
 
 
 def _load_checkpoint_state(ckpt_path: Path, device: torch.device) -> Dict[str, torch.Tensor]:
@@ -230,7 +234,13 @@ def predict_pellet_amounts(
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Predict fertilizer pellet amounts from an image.")
-    parser.add_argument("image", type=Path, help="Path to the input image.")
+    parser.add_argument(
+        "image",
+        nargs="?",
+        type=Path,
+        default=_default_image_path(),
+        help="Path to the input image (defaults to datasets/UNET_dataset/images/img_001.jpg).",
+    )
     parser.add_argument(
         "--checkpoint",
         type=Path,
