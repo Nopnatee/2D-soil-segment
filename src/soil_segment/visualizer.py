@@ -2,12 +2,14 @@ import argparse
 import os
 import re
 from pathlib import Path
-from typing import Dict, Any, Tuple, Optional, List
+from typing import Dict, Any, Tuple, Optional, List, Sequence
 
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import Slider
+from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib import patches as mpatches
 from PIL import Image
 import torchvision.transforms as transforms
 from torch.utils.data import Dataset
@@ -54,6 +56,24 @@ def _find_latest_checkpoint(path: str) -> Optional[str]:
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
 _IMAGENET_STD = [0.229, 0.224, 0.225]
+DEFAULT_CLASS_NAMES = (
+    "background",
+    "Black_DAP",
+    "Red_MOP",
+    "White_AMP",
+    "White_Boron",
+    "White_Mg",
+    "Yellow_Urea",
+)
+DEFAULT_CLASS_COLORS = [
+    (0, 0, 0),        # background - black
+    (220, 20, 60),    # Black_DAP - crimson
+    (178, 34, 34),    # Red_MOP - firebrick
+    (135, 206, 250),  # White_AMP - light sky blue
+    (255, 182, 193),  # White_Boron - light pink
+    (144, 238, 144),  # White_Mg - light green
+    (255, 215, 0),    # Yellow_Urea - gold
+]
 
 
 class PredictionDataset(Dataset):
@@ -129,6 +149,7 @@ def predict_img(
     img_size: int = 1024,
     n_classes: int = 7,
     device: Optional[str] = None,
+    class_names: Optional[Sequence[str]] = None,
 ) -> None:
     """Run model predictions across a dataset and provide a scrollable viewer."""
     resolved_ckpt = _find_latest_checkpoint(checkpoint_path)
@@ -144,6 +165,21 @@ def predict_img(
     model.eval()
 
     dataset = PredictionDataset(dataset_dir, img_size=img_size)
+
+    labels = list(class_names) if class_names is not None else list(DEFAULT_CLASS_NAMES)
+    if len(labels) < n_classes:
+        labels.extend(f"class_{idx}" for idx in range(len(labels), n_classes))
+    labels = labels[:n_classes]
+
+    base_colors = np.array(DEFAULT_CLASS_COLORS, dtype=np.float32) / 255.0
+    if base_colors.shape[0] < n_classes:
+        cmap_extra = plt.get_cmap("tab20")
+        extra_needed = n_classes - base_colors.shape[0]
+        extra_colors = cmap_extra(np.linspace(0, 1, extra_needed))[:, :3]
+        base_colors = np.vstack([base_colors, extra_colors])
+    color_palette = base_colors[:n_classes]
+    listed_cmap = ListedColormap(color_palette)
+    norm = BoundaryNorm(np.arange(n_classes + 1) - 0.5, n_classes)
 
     samples = []
     for idx in range(len(dataset)):
@@ -169,9 +205,47 @@ def predict_img(
         raise ValueError("No samples available for visualization.")
 
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-    plt.subplots_adjust(bottom=0.2 if len(samples) > 1 else 0.1)
+    plt.subplots_adjust(top=0.82, bottom=0.2 if len(samples) > 1 else 0.1)
 
-    cmap = "tab20"
+    legend_ax = fig.add_axes([0.05, 0.85, 0.9, 0.08])
+    legend_ax.axis("off")
+
+    def _draw_legend() -> None:
+        legend_ax.cla()
+        legend_ax.axis("off")
+        legend_ax.set_xlim(0, 1)
+        legend_ax.set_ylim(0, 1)
+        total = len(labels)
+        if total == 0:
+            return
+        padding = 0.02
+        width = (1 - 2 * padding) / total
+        box_height = 0.3
+        y_box = 0.25
+        for idx, (label, color) in enumerate(zip(labels, color_palette)):
+            x_pos = padding + idx * width
+            legend_ax.add_patch(
+                mpatches.Rectangle(
+                    (x_pos, y_box),
+                    width * 0.6,
+                    box_height,
+                    color=color,
+                    transform=legend_ax.transAxes,
+                    clip_on=False,
+                )
+            )
+            legend_ax.text(
+                x_pos + width * 0.3,
+                y_box + box_height + 0.05,
+                label,
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                transform=legend_ax.transAxes,
+            )
+        legend_ax.figure.canvas.draw_idle()
+
+    _draw_legend()
 
     def _render_sample(sample_idx: int) -> None:
         sample = samples[sample_idx]
@@ -182,10 +256,10 @@ def predict_img(
         axes[0].imshow(sample["image"])
         axes[0].set_title(f"Image: {sample['name']}")
 
-        axes[1].imshow(sample["mask"], cmap=cmap)
+        axes[1].imshow(sample["mask"], cmap=listed_cmap, norm=norm, interpolation="nearest")
         axes[1].set_title("Ground Truth")
 
-        axes[2].imshow(sample["prediction"], cmap=cmap)
+        axes[2].imshow(sample["prediction"], cmap=listed_cmap, norm=norm, interpolation="nearest")
         axes[2].set_title("Prediction")
 
         for ax in axes:
@@ -412,6 +486,7 @@ def main():
             img_size=args.img_size,
             n_classes=args.n_classes,
             device=args.device,
+            class_names=DEFAULT_CLASS_NAMES,
         )
 
 if __name__ == "__main__":
