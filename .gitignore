@@ -11,6 +11,7 @@ Learn 2D-Segmentation.ipynb
 UNET_dataset
 regressor_dataset
 checkpoints
+soil_segment.egg-info
 
 
 # === OS files ===
