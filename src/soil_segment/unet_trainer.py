@@ -707,14 +707,19 @@ def visualize_prediction(model, dataset, device, checkpoint_path=None, sample_in
     image, mask = dataset[sample_index]
     image = image.to(device).unsqueeze(0)
 
+    # Prepare denormalized copy for visualization
+    imagenet_mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+    imagenet_std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
+    image_vis = (image * imagenet_std + imagenet_mean).clamp(0, 1).squeeze(0).permute(1, 2, 0).cpu()
+
     with torch.no_grad():
         output = model(image)
         pred = torch.argmax(output, dim=1).squeeze().cpu().numpy()
 
     fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-    ax[0].imshow(image.squeeze().permute(1, 2, 0).cpu())
+    ax[0].imshow(image_vis)
     ax[0].set_title('Image')
-    ax[1].imshow(mask)
+    ax[1].imshow(mask.cpu().numpy() if isinstance(mask, torch.Tensor) else mask)
     ax[1].set_title('Ground Truth')
     ax[2].imshow(pred)
     ax[2].set_title('Prediction')
