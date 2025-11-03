@@ -21,6 +21,7 @@ dependencies = [
   "matplotlib",
   "joblib",
   "gradio",
+  "scikit-learn",
 ]
 
 [project.scripts]
