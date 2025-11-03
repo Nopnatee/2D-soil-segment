@@ -652,6 +652,7 @@ def main():
     """Main training script with comprehensive debugging"""
     # Set device and optimize for GPU
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"[Trainer] Using device: {device.type.upper()}")
     
     # GPU optimizations
     if torch.cuda.is_available():
@@ -684,11 +685,26 @@ def main():
     )
     
     trainer.train(num_epochs=200, print_every=5)  # Short debug run
-    visualize_prediction(model, train_loader.dataset.dataset, device)
+    best_checkpoint = os.path.join('checkpoints', 'best_model.pth')
+    visualize_prediction(
+        model=model,
+        dataset=test_loader.dataset.dataset,
+        device=device,
+        checkpoint_path=best_checkpoint
+    )
 
-def visualize_prediction(model, dataset, device):
+def visualize_prediction(model, dataset, device, checkpoint_path=None, sample_index=0):
+    if checkpoint_path:
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+            state_dict = checkpoint.get('model_state_dict', checkpoint)
+            model.load_state_dict(state_dict)
+            print(f"[Visualizer] Loaded weights from '{checkpoint_path}'.")
+        else:
+            print(f"[Visualizer] Checkpoint '{checkpoint_path}' not found; using in-memory weights.")
+
     model.eval()
-    image, mask = dataset[0]
+    image, mask = dataset[sample_index]
     image = image.to(device).unsqueeze(0)
 
     with torch.no_grad():
