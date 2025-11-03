@@ -645,6 +645,7 @@ def main():
     """Main training script with comprehensive debugging"""
     # Set device and optimize for GPU
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"[Trainer] Using device: {device.type.upper()}")
     
     # GPU optimizations
     if torch.cuda.is_available():
