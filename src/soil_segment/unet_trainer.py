@@ -665,7 +665,7 @@ def main():
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir='datasets/UNET_dataset',
         batch_size=1,
-        img_size=512,
+        img_size=1024,
         debug=False  # Enable debugging
     )
     

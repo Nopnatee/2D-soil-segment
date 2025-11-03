@@ -43,6 +43,90 @@ class ClassStat:
     percentage: float
 
 
+@dataclass(frozen=True)
+class NutrientBreakdown:
+    """Estimated nutrient composition derived from segmentation statistics."""
+
+    totals: Dict[str, float]
+    per_class: Dict[str, Dict[str, float]]
+    unmapped_classes: List[str]
+
+
+NUTRIENT_KEYS: Tuple[str, ...] = ("N", "P", "K", "S", "Mg", "Br", "Ca")
+
+# Nutrient composition table provided by agronomy team (percent by weight).
+RAW_MATERIAL_NUTRIENTS: Dict[str, Dict[str, float]] = {
+    "urea": {"N": 46.0, "P": 0.0, "K": 0.0, "S": 0.0, "Mg": 0.0, "Br": 0.0, "Ca": 0.0},
+    "dap": {"N": 18.0, "P": 45.5, "K": 0.0, "S": 0.0, "Mg": 0.0, "Br": 0.0, "Ca": 0.0},
+    "mop": {"N": 0.0, "P": 0.0, "K": 60.0, "S": 0.0, "Mg": 0.0, "Br": 0.0, "Ca": 0.0},
+    "ammoniumsulphate": {"N": 20.5, "P": 0.0, "K": 0.0, "S": 23.0, "Mg": 0.0, "Br": 0.0, "Ca": 0.0},
+    "mg": {"N": 0.0, "P": 0.0, "K": 0.0, "S": 14.0, "Mg": 10.0, "Br": 0.0, "Ca": 0.0},
+    "br": {"N": 0.0, "P": 0.0, "K": 0.0, "S": 0.0, "Mg": 0.0, "Br": 14.0, "Ca": 16.0},
+}
+
+CLASS_NAME_TO_RAW_MATERIAL: Dict[str, str] = {
+    "yellowurea": "urea",
+    "urea": "urea",
+    "blackdap": "dap",
+    "dap": "dap",
+    "redmop": "mop",
+    "mop": "mop",
+    "whiteamp": "ammoniumsulphate",
+    "whiteams": "ammoniumsulphate",
+    "whiteammoniumsulphate": "ammoniumsulphate",
+    "whiteammoniumsulfate": "ammoniumsulphate",
+    "ammoniumsulphate": "ammoniumsulphate",
+    "ammoniumsulfate": "ammoniumsulphate",
+    "amp": "ammoniumsulphate",
+    "whiteboron": "br",
+    "boron": "br",
+    "br": "br",
+    "whitemg": "mg",
+    "mg": "mg",
+}
+
+
+def _normalize_class_name(name: str) -> str:
+    return "".join(ch.lower() for ch in name if ch.isalnum())
+
+
+def calculate_nutrient_breakdown(stats: Sequence[ClassStat]) -> NutrientBreakdown:
+    pellet_stats = [stat for stat in stats if stat.idx != 0 and stat.pixel_count > 0]
+    pellet_pixels = sum(stat.pixel_count for stat in pellet_stats)
+
+    per_class: Dict[str, Dict[str, float]] = {}
+    totals: Dict[str, float] = {key: 0.0 for key in NUTRIENT_KEYS}
+    unmapped: List[str] = []
+
+    if pellet_pixels == 0:
+        return NutrientBreakdown(totals=totals, per_class=per_class, unmapped_classes=unmapped)
+
+    for stat in pellet_stats:
+        normalized_name = _normalize_class_name(stat.name)
+        material_key = CLASS_NAME_TO_RAW_MATERIAL.get(normalized_name)
+        if material_key is None:
+            for candidate in RAW_MATERIAL_NUTRIENTS:
+                if candidate in normalized_name:
+                    material_key = candidate
+                    break
+        if material_key is None:
+            unmapped.append(stat.name)
+            continue
+
+        composition = RAW_MATERIAL_NUTRIENTS[material_key]
+        fraction = stat.pixel_count / pellet_pixels
+        contributions: Dict[str, float] = {}
+
+        for nutrient in NUTRIENT_KEYS:
+            contribution = fraction * composition.get(nutrient, 0.0)
+            contributions[nutrient] = contribution
+            totals[nutrient] += contribution
+
+        per_class[stat.name] = contributions
+
+    return NutrientBreakdown(totals=totals, per_class=per_class, unmapped_classes=unmapped)
+
+
 def _default_checkpoint_path() -> Path:
     return REPO_ROOT / "checkpoints" / "best_model.pth"
 
@@ -314,6 +398,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
 
     total_pellet_pixels = sum(stat.pixel_count for stat in stats if stat.idx != 0)
+    nutrient_breakdown = calculate_nutrient_breakdown(stats)
 
     print(f"\nFertilizer pellet analysis for {args.image}:")
     for stat in stats:
@@ -325,6 +410,25 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             f"({stat.percentage:.2f}% of image)"
         )
     print(f"\nTotal pellet pixels (excluding background): {total_pellet_pixels}")
+
+    if total_pellet_pixels == 0:
+        print("\nNo pellet pixels detected; nutrient composition unavailable.")
+        return
+
+    print("\nEstimated nutrient composition (weighted by pellet pixels):")
+    primary_nutrients = ("N", "P", "K")
+    secondary_nutrients = tuple(key for key in NUTRIENT_KEYS if key not in primary_nutrients)
+
+    for nutrient in primary_nutrients:
+        print(f"  {nutrient}: {nutrient_breakdown.totals[nutrient]:.2f}%")
+    for nutrient in secondary_nutrients:
+        value = nutrient_breakdown.totals[nutrient]
+        if value > 0.0:
+            print(f"  {nutrient}: {value:.2f}%")
+
+    if nutrient_breakdown.unmapped_classes:
+        skipped = ", ".join(sorted(set(nutrient_breakdown.unmapped_classes)))
+        print(f"\nUnmapped classes (no nutrient data): {skipped}")
 
 
 if __name__ == "__main__": 
