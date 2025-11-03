@@ -592,7 +592,7 @@ def create_data_loaders(data_dir, batch_size=1, img_size=1024,
     val_subset = Subset(val_dataset, val_indices)
     test_subset = Subset(test_dataset, test_indices)
 
-    num_workers = 8
+    num_workers = 0
     pin_memory = torch.cuda.is_available()
 
     train_loader = DataLoader(
