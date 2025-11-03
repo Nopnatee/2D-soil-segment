@@ -13,8 +13,6 @@ authors = [
   { name = "Your Name" }
 ]
 dependencies = [
-  "torch",
-  "torchvision",
   "numpy",
   "opencv-python",
   "pillow",

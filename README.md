@@ -7,7 +7,9 @@
 **Install (editable)**
 
 - Create/activate a virtual environment.
-- Run: `pip install -e .`
+- Install dependencies Run: `pip install -e .`
+- Install Pytorch for cuda 13.0 Run: `pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130`
+- Manually install cuda 13.0 via Nvidia official website [https://developer.nvidia.com/cuda-toolkit]
 
 **Project Structure**
 
