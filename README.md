@@ -1,4 +1,4 @@
-﻿**2D Soil Segment – src Layout**
+﻿﻿**2D Soil Segment – src Layout**
 
 - Source code lives under `src/soil_segment` using the standard src layout.
 - All runnable examples live under `scripts/`.
@@ -7,7 +7,9 @@
 **Install (editable)**
 
 - Create/activate a virtual environment.
-- Run: `pip install -e .`
+- Install dependencies Run: `pip install -e .`
+- Install Pytorch for cuda 13.0 Run: `pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130`
+- Manually install cuda 13.0 via Nvidia official website [https://developer.nvidia.com/cuda-toolkit]
 
 **Project Structure**
 
@@ -31,5 +33,3 @@
 - `python cli.py train` – delegates to `soil_segment.trainer:main`.
 - `python cli.py viz checkpoints` – delegates to `soil_segment.visualizer:main`.
 - `cli.py` is the only root-level wrapper.
-
-
