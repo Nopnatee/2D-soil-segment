@@ -27,7 +27,15 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import PolynomialFeatures
 from tqdm import tqdm
 
-from ..soil_segment.custom_unet import SimpleUNet
+try:
+    from ..soil_segment.custom_unet import SimpleUNet
+except ImportError:  # executed when module is run as a script
+    import sys
+
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from soil_segment.custom_unet import SimpleUNet
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +66,7 @@ DEFAULT_MASK_DEFINITIONS: Tuple[MaskDefinition, ...] = (
 class RegressionConfig:
     """Container for regression-training configuration."""
 
-    dataset_dir: Path = Path("regressor_dataset")
+    dataset_dir: Path = Path("datasets/regressor_dataset")
     checkpoint_path: Optional[Path] = None
     regressor_output: Path = Path("checkpoints/regression_model.pkl")
     num_classes: int = 7
@@ -494,7 +502,12 @@ def run_regression_training(config: RegressionConfig) -> Pipeline:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train the NPK regression model.")
-    parser.add_argument("--dataset-dir", type=Path, default=Path("regressor_dataset"), help="Directory of labeled images.")
+    parser.add_argument(
+        "--dataset-dir",
+        type=Path,
+        default=Path("datasets/regressor_dataset"),
+        help="Directory of labeled images.",
+    )
     parser.add_argument(
         "--checkpoint",
         type=Path,
