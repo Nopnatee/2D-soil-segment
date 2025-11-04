@@ -27,7 +27,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import PolynomialFeatures
 from tqdm import tqdm
 
-from .custom_unet import SimpleUNet
+from ..soil_segment.custom_unet import SimpleUNet
 
 logger = logging.getLogger(__name__)
 
