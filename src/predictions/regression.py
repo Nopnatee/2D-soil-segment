@@ -1,13 +1,3 @@
-"""
-Utilities for calibrating U-Net segmentation outputs to ground-truth NPK labels.
-
-This module rewrites the regression-focused notebook into reusable Python code.
-It provides helpers for loading the segmentation model, extracting pellet areas
-per image, converting those areas into approximate NPK ratios, and training or
-loading a regression model that maps the approximations to true fertilizer
-composition values.
-"""
-
 from __future__ import annotations
 
 import argparse

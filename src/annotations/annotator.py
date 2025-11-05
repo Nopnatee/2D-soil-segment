@@ -1,21 +1,3 @@
-"""Automated image annotator (model-based pre-labeling).
-
-This tool generates single-channel masks with class IDs (0..N-1) using a
-trained segmentation checkpoint. Masks are saved under `datasets/` with
-the same filename as the source image and optional color overlays for
-quick inspection. Uploading (e.g., to Roboflow) is handled separately by
-`src/annotations/roboflow_uploader.py`.
-
-Example:
-  python -m annotations.annotator \
-      --input-dir datasets/raw_images \
-      --output-dataset datasets/annotate \
-      --num-classes 7 \
-      --class-names Background Sand Clay Silt Rock Water Organic \
-      --checkpoint checkpoints/best_model.pth \
-      --img-size 512 --device cuda
-"""
-
 from __future__ import annotations
 
 import argparse
