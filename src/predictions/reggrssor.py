@@ -6,17 +6,37 @@ import torchvision.transforms as transforms
 import os
 import sys
 import matplotlib.pyplot as plt
+from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 import time
-
 # Ensure the notebook can import the custom U-Net module
 cwd = os.getcwd()
-custom_unet_dir = os.path.join(cwd, "src", "soil_segment")
-if not os.path.exists(os.path.join(custom_unet_dir, "custom_unet.py")):
-    custom_unet_dir = os.path.join(os.path.dirname(cwd), "src", "soil_segment")
-if os.path.exists(os.path.join(custom_unet_dir, "custom_unet.py")) and custom_unet_dir not in sys.path:
-    sys.path.insert(0, custom_unet_dir)
+current_file = Path(__file__).resolve()
+src_candidate = current_file.parents[1] if current_file.parents[1].name == "src" else None
+
+if src_candidate is None or not src_candidate.exists():
+    src_candidate = None
+    for parent in current_file.parents:
+        potential = parent / "src"
+        if potential.exists():
+            src_candidate = potential
+            break
+
+if src_candidate is None:
+    raise FileNotFoundError("Could not locate the 'src' directory needed to import custom_unet.")
+
+if str(src_candidate) not in sys.path:
+    sys.path.insert(0, str(src_candidate))
+
+PROJECT_ROOT = src_candidate.parent
+DEFAULT_REGRESSOR_DATASET_DIR = str(PROJECT_ROOT / "datasets" / "regressor_dataset")
+
+from predictions.npk_pixel_predictor import (
+    CLASS_NAME_TO_RAW_MATERIAL,
+    DEFAULT_PELLET_CLASS_NAMES,
+    RAW_MATERIAL_NUTRIENTS,
+)
 
 # Resolve checkpoints directory relative to current working directory
 def resolve_checkpoint_path(filename="best_model.pth"):
@@ -33,28 +53,64 @@ def resolve_checkpoint_path(filename="best_model.pth"):
 
 
 # Import your custom U-Net
-from custom_unet import SimpleUNet, ConvBlock
+from soil_segment.custom_unet import SimpleUNet, ConvBlock
 
 # === FILTER CONFIG ===
-BEAD_MASKS = 4             # Number of clusters/classes (excluding background)
-CONTRAST_FACTOR = 1       # >1 increases contrast
-SATURATION_FACTOR = 1       # >1 increases vividity
+CONTRAST_FACTOR = 1        # >1 increases contrast
+SATURATION_FACTOR = 1      # >1 increases vividity
 BRIGHTNESS_OFFSET = 0      # Offset for brightness adjustment
-NUM_CLASSES = 5            # Total classes (including background)
+NUM_CLASSES = None         # Will be inferred from the checkpoint
+CUDA_WARNING_ISSUED = False
+CLASS_NAMES = []
+PELLET_CLASS_NAMES = []
 
 # Check GPU availability
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Using device: {DEVICE}")
 
 # === Load U-Net Model ===
+def resolve_class_names(num_classes):
+    defaults = list(DEFAULT_PELLET_CLASS_NAMES)
+    if len(defaults) < num_classes:
+        for idx in range(len(defaults), num_classes):
+            defaults.append(f"Pellet Class {idx}")
+    return defaults[:num_classes]
+
+
+def _normalize_class_name(name):
+    return "".join(ch.lower() for ch in name if ch.isalnum())
+
+
+def _material_key_for_class(name):
+    normalized = _normalize_class_name(name)
+    material_key = CLASS_NAME_TO_RAW_MATERIAL.get(normalized)
+    if material_key:
+        return material_key
+    for candidate in RAW_MATERIAL_NUTRIENTS:
+        if candidate in normalized:
+            return candidate
+    return None
+
+
 def load_unet_model():
-    """Load the trained U-Net model"""
+    """Load the trained U-Net model and infer its number of classes."""
     checkpoint_path = resolve_checkpoint_path("best_model.pth")
     checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
-    model = SimpleUNet(in_channels=3, n_classes=NUM_CLASSES)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
+
+    if 'final_conv.weight' not in state_dict:
+        raise KeyError("Checkpoint is missing 'final_conv.weight'; cannot infer number of classes.")
+
+    num_classes = state_dict['final_conv.weight'].shape[0]
+    model = SimpleUNet(in_channels=3, n_classes=num_classes)
+    model.load_state_dict(state_dict)
     model.eval()
     model.to(DEVICE)
+    global NUM_CLASSES, CLASS_NAMES, PELLET_CLASS_NAMES
+    NUM_CLASSES = num_classes
+    CLASS_NAMES = resolve_class_names(NUM_CLASSES)
+    PELLET_CLASS_NAMES = CLASS_NAMES[1:] if len(CLASS_NAMES) > 1 else []
+    print(f"Loaded U-Net with {NUM_CLASSES} classes.")
     return model
 
 # Initialize model
@@ -69,7 +125,7 @@ unet_transform = transforms.Compose([
 ])
 
 # === Auto-detect image folders ===
-def auto_detect_image_folders(base_path="regressor_dataset"):
+def auto_detect_image_folders(base_path=DEFAULT_REGRESSOR_DATASET_DIR):
     """
     Automatically detect all subfolders in the base path that contain images
     
@@ -124,7 +180,7 @@ def auto_detect_image_folders(base_path="regressor_dataset"):
     return img_path_list
 
 # === Load the image paths automatically ===
-img_path_list = auto_detect_image_folders("regressor_dataset")
+img_path_list = auto_detect_image_folders()
 
 if not img_path_list:
     raise FileNotFoundError("No valid image folders found.")
@@ -183,30 +239,27 @@ def predict_with_unet(image_path, model):
 def get_cluster_mask_gpu(image_path, use_gpu=True):
     """
     Replace K-means clustering with U-Net prediction.
-    Returns masks in order of U-Net class IDs (1 to BEAD_MASKS).
+    Returns masks following the trained class order (background excluded).
     """
-    if not use_gpu or not torch.cuda.is_available():
-        raise NotImplementedError("GPU acceleration is required for this function.")
+    global CUDA_WARNING_ISSUED
+    if use_gpu and not torch.cuda.is_available():
+        if not CUDA_WARNING_ISSUED:
+            print("Warning: CUDA not available; falling back to CPU inference.")
+            CUDA_WARNING_ISSUED = True
+        use_gpu = False
+    if not PELLET_CLASS_NAMES:
+        raise RuntimeError("Class names not initialized; load_unet_model() must be called first.")
     
     # Get U-Net prediction
     pred_mask, enhanced_image = predict_with_unet(image_path, unet_model)
     
-    H, W = pred_mask.shape
-
     # Create individual masks for each class (excluding background class 0)
-    all_masks = []
-    for class_id in range(1, min(NUM_CLASSES, BEAD_MASKS + 1)):
-        class_mask = (pred_mask == class_id)
-        all_masks.append(class_mask)
-    
-    # If fewer classes are present, pad with empty masks
-    while len(all_masks) < BEAD_MASKS:
-        all_masks.append(np.zeros((H, W), dtype=bool))
-    
-    # Only keep the first BEAD_MASKS classes (in U-Net ID order)
-    all_masks = all_masks[:BEAD_MASKS]
-    
-    return all_masks, enhanced_image
+    pellet_masks = []
+    for class_id, _ in enumerate(PELLET_CLASS_NAMES, start=1):
+        class_mask = pred_mask == class_id
+        pellet_masks.append(class_mask)
+
+    return pellet_masks, enhanced_image
 
 # === GPU-accelerated area computation ===
 def get_area_gpu(image_path, use_gpu=True):
@@ -229,13 +282,13 @@ def get_area_gpu(image_path, use_gpu=True):
 # === Process all images and return numpy array ===
 def process_all_images(use_gpu=True):
     """
-    Process all images in img_path_list and return cluster areas as numpy array of shape (n_images, 4)
+    Process all images in img_path_list and return cluster areas as numpy array of shape (n_images, n_classes)
     
     Args:
         use_gpu (bool): Whether to use GPU acceleration
     
     Returns:
-        numpy.ndarray: Array of shape (n_images, 4) containing cluster areas for each image
+        numpy.ndarray: Array containing cluster areas for each image
     """
     all_results = []
     total_images = sum(len(folder_images) for folder_images in img_path_list)
@@ -260,14 +313,6 @@ def process_all_images(use_gpu=True):
                 # Get cluster areas for this image using U-Net
                 cluster_areas, _, _ = get_area_gpu(img_path, use_gpu)
                 
-                # Ensure we have exactly 4 clusters
-                if len(cluster_areas) != BEAD_MASKS:
-                    print(f"Warning: Expected {BEAD_MASKS} clusters, got {len(cluster_areas)}")
-                    # Pad with zeros if needed, or truncate if too many
-                    padded_areas = np.zeros(BEAD_MASKS)
-                    padded_areas[:min(len(cluster_areas), BEAD_MASKS)] = cluster_areas[:BEAD_MASKS]
-                    cluster_areas = padded_areas
-                
                 all_results.append(cluster_areas)
                 
                 end_time = time.time()
@@ -277,7 +322,7 @@ def process_all_images(use_gpu=True):
             except Exception as e:
                 print(f"✗ Error processing {img_path}: {str(e)}")
                 # Add zeros for failed images to maintain array structure
-                all_results.append(np.zeros(BEAD_MASKS))
+                all_results.append(np.zeros(len(PELLET_CLASS_NAMES)))
     
     # Convert to numpy array
     results_array = np.array(all_results)
@@ -326,9 +371,15 @@ colors = [
     (65, 31, 31),    # "#411F1F"
     (255, 64, 64),   # "#FF4040"
     (255, 221, 26),  # "#FFDD1A"
-    (117, 246, 255)  # "#75F6FF"
+    (117, 246, 255), # "#75F6FF"
+    (128, 0, 128),   # "#800080"
+    (255, 182, 193)  # "#FFB6C1"
 ]
-for class_id in range(min(NUM_CLASSES, len(colors))):
+if NUM_CLASSES is not None and NUM_CLASSES > len(colors):
+    # Pad with neutral colors if checkpoint has more classes than predefined
+    colors.extend([(200, 200, 200)] * (NUM_CLASSES - len(colors)))
+class_limit = NUM_CLASSES if isinstance(NUM_CLASSES, int) else len(colors)
+for class_id in range(min(class_limit, len(colors))):
     mask = pred_mask == class_id
     unet_colored[mask] = colors[class_id]
 plt.imshow(unet_colored)
@@ -336,20 +387,19 @@ plt.title("U-Net Segmentation\n(All Classes)")
 plt.axis('off')
 
 # === Visualize clusters in U-Net class order ===
-cluster_names = ['Black Beads', 'Red Beads', 'Stain Beads', 'White Beads']
+cluster_names = list(PELLET_CLASS_NAMES)
+cluster_display = list(zip(cluster_names, all_masks, cluster_areas))
 
-for i in range(BEAD_MASKS):
-    mask = all_masks[i]
+for i, (name, mask, area) in enumerate(cluster_display[:4]):
     brightness = np.mean(rgb_image[mask]) if np.any(mask) else float('nan')
-    
-    # Create masked image
+
     masked_img = np.zeros_like(rgb_image)
     masked_img[mask] = rgb_image[mask]
-    
+
     plt.subplot(2, 4, i + 5)
     plt.imshow(masked_img)
     b_str = f"{brightness:.2f}" if not np.isnan(brightness) else "N/A"
-    plt.title(f"{cluster_names[i]}\nArea: {cluster_areas[i]} px\nBrightness: {b_str}")
+    plt.title(f"{name}\nArea: {area} px\nBrightness: {b_str}")
     plt.axis('off')
 
 plt.tight_layout()
@@ -359,11 +409,12 @@ plt.show()
 print("\nU-Net Prediction Statistics:")
 print("-" * 40)
 unique_classes, class_counts = np.unique(pred_mask, return_counts=True)
+class_name_map = {idx + 1: name for idx, name in enumerate(cluster_names)}
 for class_id, count in zip(unique_classes, class_counts):
     if class_id == 0:
         print(f"Background: {count} pixels")
     else:
-        class_name = cluster_names[min(class_id-1, len(cluster_names)-1)]
+        class_name = class_name_map.get(class_id, f"Class {class_id}")
         print(f"Class {class_id} ({class_name}): {count} pixels")
 
 # Print cluster statistics from U-Net
@@ -383,26 +434,33 @@ print(cluster_areas)
 # %%
 
 def get_npk(cluster_areas):
-    """Get approximate NPK values based on cluster areas.
-    
+    """Approximate NPK composition based on pellet class areas.
+
     Parameters:
-        cluster_areas (list or array): [black, red, stain, white] areas
+        cluster_areas (Sequence[float]): Areas aligned with PELLET_CLASS_NAMES.
     """
-    compositions = [
-        {'N': 18, 'P': 46, 'K': 0},   # black
-        {'N': 0, 'P': 0, 'K': 60},   # red
-        {'N': 21, 'P': 0, 'K': 0},   # stain
-        {'N': 46, 'P': 0, 'K': 0}   # white
-    ]
-    
-    npk_total = {'N': 0, 'P': 0, 'K': 0}
-    
-    for i, area in enumerate(cluster_areas):
-        for key in npk_total:
-            npk_total[key] += compositions[i][key] * area
-    
-    total_beads = sum(cluster_areas)
-    return [round(npk_total[key] / total_beads, 6) for key in ['N', 'P', 'K']]
+    if not PELLET_CLASS_NAMES:
+        raise RuntimeError("Pellet class names not initialized; load_unet_model() must be called first.")
+
+    areas = np.asarray(cluster_areas, dtype=float)
+    pellet_total = float(areas.sum())
+    if pellet_total <= 0:
+        return [0.0, 0.0, 0.0]
+
+    npk_total = {'N': 0.0, 'P': 0.0, 'K': 0.0}
+
+    for class_name, area in zip(PELLET_CLASS_NAMES, areas):
+        if area <= 0:
+            continue
+        material_key = _material_key_for_class(class_name)
+        if material_key is None:
+            continue
+        composition = RAW_MATERIAL_NUTRIENTS.get(material_key, {})
+        fraction = area / pellet_total
+        for nutrient in npk_total:
+            npk_total[nutrient] += composition.get(nutrient, 0.0) * fraction
+
+    return [round(npk_total[nutrient], 6) for nutrient in ['N', 'P', 'K']]
 
 
 # Prepare data for regression
@@ -622,7 +680,7 @@ def predict_npk(regressor, cluster_areas):
 
     Parameters:
         regressor (LinearRegression): Trained regression model
-        cluster_areas (list or array): [white, stain, red, black] areas
+        cluster_areas (list or array): Areas aligned with PELLET_CLASS_NAMES
 
     Returns:
         np.ndarray: Predicted NPK values as a NumPy array [N, P, K]
@@ -728,4 +786,3 @@ for i, component in enumerate(components):
     reg_errors = X_predicted_npk[:, i] - actual_npk[:, i]
     print_stats(raw_errors, "Raw Approximate")
     print_stats(reg_errors, "Regression Predicted")
-
