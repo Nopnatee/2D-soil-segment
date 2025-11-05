@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 import time
+import math
 # Ensure the notebook can import the custom U-Net module
 cwd = os.getcwd()
 current_file = Path(__file__).resolve()
@@ -347,23 +348,6 @@ print(f"Processing example image: {example_img_path}")
 pred_mask, rgb_image = predict_with_unet(example_img_path, unet_model)
 cluster_areas, all_masks, _ = get_area_gpu(example_img_path, use_gpu=True)
 
-# Create visualization
-plt.figure(figsize=(24, 16))
-
-# Original image
-plt.subplot(2, 4, 1)
-plt.imshow(image_rgb)
-plt.title("Original Image")
-plt.axis('off')
-
-# Enhanced image
-plt.subplot(2, 4, 2)
-plt.imshow(rgb_image)
-plt.title("Enhanced Image")
-plt.axis('off')
-
-# U-Net prediction mask (full segmentation)
-plt.subplot(2, 4, 3)
 # Create colored visualization of the full U-Net prediction
 unet_colored = np.zeros((*pred_mask.shape, 3), dtype=np.uint8)
 colors = [
@@ -382,25 +366,40 @@ class_limit = NUM_CLASSES if isinstance(NUM_CLASSES, int) else len(colors)
 for class_id in range(min(class_limit, len(colors))):
     mask = pred_mask == class_id
     unet_colored[mask] = colors[class_id]
-plt.imshow(unet_colored)
-plt.title("U-Net Segmentation\n(All Classes)")
-plt.axis('off')
 
 # === Visualize clusters in U-Net class order ===
 cluster_names = list(PELLET_CLASS_NAMES)
 cluster_display = list(zip(cluster_names, all_masks, cluster_areas))
 
-for i, (name, mask, area) in enumerate(cluster_display[:4]):
-    brightness = np.mean(rgb_image[mask]) if np.any(mask) else float('nan')
+base_visuals = [
+    ("Original Image", image_rgb),
+    ("Enhanced Image", rgb_image),
+    ("U-Net Segmentation\n(All Classes)", unet_colored),
+]
 
+total_plots = len(base_visuals) + len(cluster_display)
+cols = 4
+rows = max(1, math.ceil(total_plots / cols))
+fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows))
+axes = np.array(axes, ndmin=1).ravel()
+
+for idx, (title, img) in enumerate(base_visuals):
+    axes[idx].imshow(img)
+    axes[idx].set_title(title)
+    axes[idx].axis('off')
+
+for idx, (name, mask, area) in enumerate(cluster_display, start=len(base_visuals)):
+    ax = axes[idx]
     masked_img = np.zeros_like(rgb_image)
     masked_img[mask] = rgb_image[mask]
-
-    plt.subplot(2, 4, i + 5)
-    plt.imshow(masked_img)
+    brightness = np.mean(rgb_image[mask]) if np.any(mask) else float('nan')
     b_str = f"{brightness:.2f}" if not np.isnan(brightness) else "N/A"
-    plt.title(f"{name}\nArea: {area} px\nBrightness: {b_str}")
-    plt.axis('off')
+    ax.imshow(masked_img)
+    ax.set_title(f"{name}\nArea: {area} px\nBrightness: {b_str}")
+    ax.axis('off')
+
+for ax in axes[total_plots:]:
+    ax.axis('off')
 
 plt.tight_layout()
 plt.show()
