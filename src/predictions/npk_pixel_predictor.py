@@ -132,7 +132,21 @@ def _default_checkpoint_path() -> Path:
 
 
 def _default_image_path() -> Path:
-    return REPO_ROOT / "datasets" / "UNET_dataset" / "images" / "img_001.jpg"
+    primary = REPO_ROOT / "datasets" / "UNET_dataset" / "images" / "img_001.jpg"
+    alternate = REPO_ROOT / "datasets" / "UNET_dataset" / "Semantic_segmentation" / "images" / "img_001.jpg"
+
+    for candidate in (primary, alternate):
+        if candidate.exists():
+            return candidate
+
+    dataset_root = REPO_ROOT / "datasets" / "UNET_dataset"
+    if dataset_root.exists():
+        for extension in ("*.jpg", "*.jpeg", "*.png"):
+            matches = sorted(dataset_root.rglob(extension))
+            if matches:
+                return matches[0]
+
+    return primary
 
 
 def _load_checkpoint_state(ckpt_path: Path, device: torch.device) -> Dict[str, torch.Tensor]:
@@ -323,7 +337,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         nargs="?",
         type=Path,
         default=_default_image_path(),
-        help="Path to the input image (defaults to datasets/UNET_dataset/images/img_001.jpg).",
+        help="Path to the input image (defaults to the first sample in datasets/UNET_dataset).",
     )
     parser.add_argument(
         "--checkpoint",
