@@ -14,9 +14,9 @@
 **Project Structure**
 
 - `src/soil_segment/` – importable package (models and helpers)
-- `src/soil_segment/trainer.py` – training module (with `main()`)
-- `src/soil_segment/visualizer.py` – training history visualizer (with `main()`)
-- `scripts/` – standalone examples and apps (e.g. `npk_predictor.py`, `gradio_app.py`)
+- `src/soil_segment/unet_trainer.py` - training module (exposes `main()`)
+- `src/soil_segment/visualizer.py` - training history visualizer (with `main()`)
+- `scripts/` - runnable tools (`annotator.py`, `npk_pixel_predictor.py`, `gradio_app.py`)
 - `cli.py` – single unified wrapper at the repository root
 - `checkpoints/` – model weights and regressors
 - `datasets/UNET_dataset`, `datasets/regressor_dataset` – datasets
@@ -25,8 +25,11 @@
 
 - From code: `from soil_segment.custom_unet import SimpleUNet`.
 - After `pip install -e .`, you can also use:
-  - `soil-segment-train` – runs `soil_segment.trainer:main`
-  - `soil-segment-viz` – runs `soil_segment.visualizer:main`
+  - `soil-segment-train` - runs `soil_segment.unet_trainer:main`
+  - `soil-segment-viz` - runs `soil_segment.visualizer:main`
+  - `soil-segment-annotate` - runs the automated annotation helper
+  - `soil-segment-predict` - runs the pixel-wise NPK predictor CLI
+  - `soil-segment-gradio` - launches the Gradio-based NPK demo
 
 **Unified CLI**
 

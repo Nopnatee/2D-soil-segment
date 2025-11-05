@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -12,16 +11,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC_DIR = REPO_ROOT / "src"
+from soil_segment.custom_unet import SimpleUNet  # type: ignore
 
-try:
-    from soil_segment.custom_unet import SimpleUNet
-except ModuleNotFoundError:
-    # Support running directly from the repository without `pip install -e .`
-    if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
-        sys.path.insert(0, str(SRC_DIR))
-    from soil_segment.custom_unet import SimpleUNet  # type: ignore
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_PELLET_CLASS_NAMES: Tuple[str, ...] = (
     "background",

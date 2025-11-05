@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -19,14 +17,7 @@ except ImportError as exc:  # pragma: no cover - UI dependency
 import torch
 import torch.nn.functional as F
 
-try:
-    from soil_segment.custom_unet import SimpleUNet  # type: ignore
-except ModuleNotFoundError:  # allow running from repo root without install
-    here = Path(__file__).resolve().parents[2]
-    src_path = here / "src"
-    if src_path.exists() and str(src_path) not in sys.path:
-        sys.path.insert(0, str(src_path))
-    from soil_segment.custom_unet import SimpleUNet  # type: ignore
+from soil_segment.custom_unet import SimpleUNet  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -42,7 +33,7 @@ def _default_checkpoint_path() -> Path:
     Prefers `checkpoints/best_model.pth` next to the project root regardless
     of current working directory.
     """
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[1]
     return repo_root / "checkpoints" / "best_model.pth"
 
 

@@ -611,7 +611,8 @@ def create_gradio_interface():
         return demo
 
 # Launch the application
-if __name__ == "__main__":
+def main() -> None:
+    """Run the Gradio NPK predictor UI."""
     demo = create_gradio_interface()
     demo.launch(
         server_name="0.0.0.0",
@@ -620,3 +621,7 @@ if __name__ == "__main__":
         debug=True,
         inbrowser=True
     )
+
+
+if __name__ == "__main__":
+    main()

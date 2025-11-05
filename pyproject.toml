@@ -22,12 +22,15 @@ dependencies = [
 ]
 
 [project.scripts]
-soil-segment-train = "soil_segment.trainer:main"
+soil-segment-train = "soil_segment.unet_trainer:main"
 soil-segment-viz = "soil_segment.visualizer:main"
+soil-segment-annotate = "scripts.annotator:main"
+soil-segment-predict = "scripts.npk_pixel_predictor:main"
+soil-segment-gradio = "scripts.gradio_app:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "src", "scripts" = "scripts"}
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["soil_segment*"]
+where = ["src", "scripts"]
+include = ["soil_segment*", "scripts*"]
