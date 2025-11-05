@@ -22,6 +22,7 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
+import matplotlib.pyplot as plt
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import PolynomialFeatures
@@ -77,6 +78,8 @@ class RegressionConfig:
     mask_definitions: Sequence[MaskDefinition] = DEFAULT_MASK_DEFINITIONS
     image_extensions: Tuple[str, ...] = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
     show_progress: bool = True
+    generate_visualizations: bool = False
+    visualization_output: Optional[Path] = None
 
 
 @dataclass
@@ -333,6 +336,136 @@ def get_npk(
     return compute_approximate_npk(cluster_areas, mask_definitions)
 
 
+def print_stats(errors: np.ndarray, label: str) -> Tuple[float, float]:
+    """Log MAE and RMSE statistics for a set of errors."""
+
+    mae = float(np.mean(np.abs(errors)))
+    rmse = float(np.sqrt(np.mean(np.square(errors))))
+    logger.info("%s MAE: %.3f, RMSE: %.3f", label, mae, rmse)
+    return mae, rmse
+
+
+def plot_regression_diagnostics(
+    approx_npk: np.ndarray,
+    actual_npk: np.ndarray,
+    predicted_npk: np.ndarray,
+    *,
+    components: Sequence[str] = NUTRIENT_KEYS,
+    save_path: Optional[Path] = None,
+    show: bool = True,
+) -> None:
+    """Generate scatter/error plots comparing raw and regressed NPK predictions."""
+
+    approx_arr = np.asarray(approx_npk)
+    actual_arr = np.asarray(actual_npk)
+    predicted_arr = np.asarray(predicted_npk)
+
+    fig, axes = plt.subplots(3, len(components), figsize=(6 * len(components), 15))
+    fig.suptitle("NPK Prediction Comparison: Raw Approximate vs Regression", fontsize=18, fontweight="bold")
+
+    for idx, component in enumerate(components):
+        color_cycle = ("blue", "red", "green")
+        color = color_cycle[idx % len(color_cycle)]
+
+        ax_actual_raw = axes[0, idx]
+        ax_actual_reg = axes[1, idx]
+        ax_errors = axes[2, idx]
+
+        ax_actual_raw.scatter(
+            actual_arr[:, idx],
+            approx_arr[:, idx],
+            alpha=0.6,
+            color=color,
+            s=50,
+            edgecolors="black",
+            linewidth=0.5,
+        )
+        min_val = min(np.min(actual_arr[:, idx]), np.min(approx_arr[:, idx]))
+        max_val = max(np.max(actual_arr[:, idx]), np.max(approx_arr[:, idx]))
+        ax_actual_raw.plot([min_val, max_val], [min_val, max_val], "r--", alpha=0.8, linewidth=2)
+        ax_actual_raw.set_xlabel(f"Actual {component}")
+        ax_actual_raw.set_ylabel(f"Raw Approximate {component}")
+        ax_actual_raw.set_title(f"{component}: Actual vs Raw Approximate")
+        ax_actual_raw.grid(True, alpha=0.3)
+
+        ax_actual_reg.scatter(
+            actual_arr[:, idx],
+            predicted_arr[:, idx],
+            alpha=0.6,
+            color=color,
+            s=50,
+            edgecolors="black",
+            linewidth=0.5,
+        )
+        min_val = min(np.min(actual_arr[:, idx]), np.min(predicted_arr[:, idx]))
+        max_val = max(np.max(actual_arr[:, idx]), np.max(predicted_arr[:, idx]))
+        ax_actual_reg.plot([min_val, max_val], [min_val, max_val], "r--", alpha=0.8, linewidth=2)
+        ax_actual_reg.set_xlabel(f"Actual {component}")
+        ax_actual_reg.set_ylabel(f"Regression Predicted {component}")
+        ax_actual_reg.set_title(f"{component}: Actual vs Regression Predicted")
+        ax_actual_reg.grid(True, alpha=0.3)
+
+        raw_errors = approx_arr[:, idx] - actual_arr[:, idx]
+        reg_errors = predicted_arr[:, idx] - actual_arr[:, idx]
+        ax_errors.scatter(
+            range(len(raw_errors)),
+            raw_errors,
+            label="Raw Error",
+            alpha=0.7,
+            color="gray",
+            s=30,
+        )
+        ax_errors.scatter(
+            range(len(reg_errors)),
+            reg_errors,
+            label="Regression Error",
+            alpha=0.7,
+            color=color,
+            s=30,
+        )
+        ax_errors.axhline(y=0, color="black", linestyle="--", alpha=0.5)
+        ax_errors.set_xlabel("Sample Index")
+        ax_errors.set_ylabel("Error")
+        ax_errors.set_title(f"{component}: Prediction Errors Comparison")
+        ax_errors.legend()
+        ax_errors.grid(True, alpha=0.3)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    if save_path:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, bbox_inches="tight")
+        logger.info("Saved regression diagnostics figure to %s", save_path)
+
+    if show and not save_path:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def summarize_regression_errors(
+    actual_npk: np.ndarray,
+    approx_npk: np.ndarray,
+    predicted_npk: np.ndarray,
+    *,
+    components: Sequence[str] = NUTRIENT_KEYS,
+) -> None:
+    """Log MAE/RMSE for raw approximations and regression outputs."""
+
+    actual_arr = np.asarray(actual_npk)
+    approx_arr = np.asarray(approx_npk)
+    predicted_arr = np.asarray(predicted_npk)
+
+    logger.info("=== Error statistics comparison ===")
+    for idx, component in enumerate(components):
+        logger.info("Component: %s", component)
+        raw_errors = approx_arr[:, idx] - actual_arr[:, idx]
+        reg_errors = predicted_arr[:, idx] - actual_arr[:, idx]
+        print_stats(raw_errors, "Raw Approximate")
+        print_stats(reg_errors, "Regression Predicted")
+
+
 def parse_actual_npk_from_path(image_path: Path) -> Optional[np.ndarray]:
     """Infer the ground-truth NPK value from the parent folder name."""
 
@@ -497,6 +630,17 @@ def run_regression_training(config: RegressionConfig) -> Pipeline:
         save_path=config.regressor_output,
     )
 
+    if config.generate_visualizations:
+        predictions = regressor.predict(features)
+        plot_regression_diagnostics(
+            approx_npk=features,
+            actual_npk=labels,
+            predicted_npk=predictions,
+            save_path=config.visualization_output,
+            show=config.visualization_output is None,
+        )
+        summarize_regression_errors(labels, features, predictions)
+
     return regressor
 
 
@@ -526,6 +670,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--alpha", type=float, default=1.0, help="Ridge regularisation strength.")
     parser.add_argument("--device", type=str, default=None, help="Torch device identifier (e.g., cuda, cpu).")
     parser.add_argument("--no-progress", action="store_true", help="Disable progress bars.")
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="Generate diagnostic plots and error statistics after training.",
+    )
+    parser.add_argument(
+        "--viz-output",
+        type=Path,
+        default=None,
+        help="Optional path to save the visualization figure.",
+    )
     return parser
 
 
@@ -543,6 +698,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         polynomial_degree=args.degree,
         ridge_alpha=args.alpha,
         show_progress=not args.no_progress,
+        generate_visualizations=args.visualize,
+        visualization_output=args.viz_output,
     )
 
     run_regression_training(config)
