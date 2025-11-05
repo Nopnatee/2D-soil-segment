@@ -21,6 +21,11 @@ dependencies = [
   "gradio",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0",
+]
+
 [project.scripts]
 soil-segment-train = "soil_segment.unet_trainer:main"
 soil-segment-viz = "soil_segment.visualizer:main"

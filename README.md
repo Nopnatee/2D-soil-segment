@@ -17,9 +17,10 @@
 - `src/soil_segment/unet_trainer.py` - training module (exposes `main()`)
 - `src/soil_segment/visualizer.py` - training history visualizer (with `main()`)
 - `scripts/` - runnable tools (`annotator.py`, `npk_pixel_predictor.py`, `gradio_app.py`)
-- `cli.py` – single unified wrapper at the repository root
-- `checkpoints/` – model weights and regressors
-- `datasets/UNET_dataset`, `datasets/regressor_dataset` – datasets
+- `tests/` - lightweight regression checks (run with `pytest`)
+- `cli.py` - single unified wrapper at the repository root
+- `checkpoints/` - generated weights (ignored by git, recreate locally as needed)
+- `datasets/` - local datasets (ignored by git; populate before training/inference)
 
 **Usage**
 
@@ -33,6 +34,6 @@
 
 **Unified CLI**
 
-- `python cli.py train` – delegates to `soil_segment.trainer:main`.
+- `python cli.py train` - delegates to `soil_segment.unet_trainer:main`.
 - `python cli.py viz checkpoints` – delegates to `soil_segment.visualizer:main`.
 - `cli.py` is the only root-level wrapper.

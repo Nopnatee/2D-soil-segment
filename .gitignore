@@ -7,11 +7,10 @@ Learn 2D-Segmentation.ipynb
 *.png
 *.html
 *.jpeg
-.gradio
-UNET_dataset
-regressor_dataset
-checkpoints
-soil_segment.egg-info
+.gradio/
+datasets/
+checkpoints/
+soil_segment.egg-info/
 
 
 # === OS files ===
