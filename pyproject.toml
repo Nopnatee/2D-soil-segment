@@ -13,12 +13,18 @@ authors = [
   { name = "Your Name" }
 ]
 dependencies = [
+  "gradio",
+  "joblib",
+  "matplotlib",
   "numpy",
   "opencv-python",
   "pillow",
-  "matplotlib",
-  "joblib",
-  "gradio",
+  "requests",
+  "scikit-learn",
+  "seaborn",
+  "torch",
+  "torchvision",
+  "tqdm",
 ]
 
 [project.optional-dependencies]
