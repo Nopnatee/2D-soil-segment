@@ -8,7 +8,6 @@ Learn 2D-Segmentation.ipynb
 *.html
 *.jpeg
 .gradio/
-datasets/
 checkpoints/
 soil_segment.egg-info/
 

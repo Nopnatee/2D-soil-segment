@@ -1,0 +1,12 @@
+{
+  "num_classes": 7,
+  "class_names": [
+    "background",
+    "Black_DAP",
+    "Red_MOP",
+    "White_AMP",
+    "White_Boron",
+    "White_Mg",
+    "Yellow_Urea"
+  ]
+}
