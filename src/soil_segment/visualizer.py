@@ -20,8 +20,10 @@ if __package__ in (None, ""):
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     from soil_segment.custom_unet import SimpleUNet
+    from soil_segment.config import get_data_paths
 else:
     from .custom_unet import SimpleUNet
+    from .config import get_data_paths
 
 
 def _find_latest_checkpoint(path: str) -> Optional[str]:
@@ -473,9 +475,7 @@ def main():
     if not args.no_predict:
         dataset_path = args.dataset
         if dataset_path is None:
-            default_dataset = Path(__file__).resolve().parents[2] / "datasets" / "UNET_dataset"
-            if default_dataset.is_dir():
-                dataset_path = str(default_dataset)
+            dataset_path = str(get_data_paths()["unet_dataset"])
         if dataset_path is None:
             raise ValueError("Dataset path is required for predictions. Provide --dataset or use --no-predict.")
         if not os.path.isdir(dataset_path):

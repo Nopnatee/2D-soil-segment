@@ -22,8 +22,10 @@ import random
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     from soil_segment.custom_unet import SimpleUNet, ConvBlock
+    from soil_segment.config import get_data_paths
 else:
     from .custom_unet import SimpleUNet, ConvBlock
+    from .config import get_data_paths
 
 # --- Joint transform class with debug ---
 class JointTransform:
@@ -661,10 +663,14 @@ def main():
     
     # Create model (you'll need to define SimpleUNet or import it)
     model = SimpleUNet(n_classes=7)
-    
+
+    paths = get_data_paths()
+    dataset_dir = str(paths["unet_dataset"])
+    checkpoints_dir = str(paths["checkpoints"])
+
     # Create data loaders with debugging enabled
     train_loader, val_loader, test_loader = create_data_loaders(
-        data_dir='datasets/UNET_dataset',
+        data_dir=dataset_dir,
         batch_size=1,
         img_size=1024,
         debug=False  # Enable debugging
@@ -683,9 +689,9 @@ def main():
         n_classes=7,
         debug=False  # Enable debugging
     )
-    
+
     trainer.train(num_epochs=200, print_every=5)  # Short debug run
-    best_checkpoint = os.path.join('checkpoints', 'best_model.pth')
+    best_checkpoint = os.path.join(checkpoints_dir, 'best_model.pth')
     visualize_prediction(
         model=model,
         dataset=test_loader.dataset.dataset,
