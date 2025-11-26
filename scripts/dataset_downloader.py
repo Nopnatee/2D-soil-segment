@@ -9,7 +9,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
-DEFAULT_DEST = SCRIPT_ROOT / "datasets" / "UNET_dataset"
+REPO_ROOT = SCRIPT_ROOT if SCRIPT_ROOT.name != "scripts" else SCRIPT_ROOT.parent
+DEFAULT_DEST = REPO_ROOT / "datasets" / "UNET_dataset"
 
 DEFAULT_WORKSPACE = "npk-segmentation"
 DEFAULT_PROJECT = "npk-segmentation-d40wm"
@@ -17,15 +18,10 @@ DEFAULT_VERSION = 7
 DEFAULT_FORMAT = "png-mask-semantic"
 DEFAULT_PREFIX = "img."
 
-ENV_PATH_CANDIDATES = (
-    SCRIPT_ROOT / ".env",
-    SCRIPT_ROOT / "2D-soil-segment" / ".env",
-)
-
-
 def _load_env_file() -> Optional[Path]:
     """Lightweight .env loader to prime os.environ for defaults."""
-    for env_path in ENV_PATH_CANDIDATES:
+    for candidate_dir in (SCRIPT_ROOT,) + tuple(SCRIPT_ROOT.parents):
+        env_path = candidate_dir / ".env"
         if not env_path.exists():
             continue
         for line in env_path.read_text().splitlines():
@@ -187,7 +183,7 @@ def parse_args(argv: List[str], defaults: Dict[str, object]) -> argparse.Namespa
 
 def main(argv: List[str] | None = None) -> None:
     env_path = _load_env_file()
-    env_dir = env_path.parent if env_path else SCRIPT_ROOT
+    env_dir = env_path.parent if env_path else REPO_ROOT
     defaults = _build_defaults(env_dir)
 
     args = parse_args(argv or sys.argv[1:], defaults)
