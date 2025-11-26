@@ -67,30 +67,38 @@ def _is_mask_path(path: Path) -> bool:
 
 
 def _collect_pairs(source_root: Path) -> Tuple[List[Tuple[Path, Path]], List[str], List[str]]:
+    """Find image/mask pairs even when stored in one folder with *_mask names."""
     image_map: Dict[str, Path] = {}
     mask_map: Dict[str, Path] = {}
     valid_exts = {".jpg", ".jpeg", ".png"}
+    mask_suffixes = ("_mask", "-mask", ".mask")
 
     for file_path in source_root.rglob("*"):
         if not file_path.is_file() or file_path.suffix.lower() not in valid_exts:
             continue
 
         stem = file_path.stem
+        stem_lower = stem.lower()
         parent_name = file_path.parent.name.lower()
 
-        if parent_name == "images" or ("image" in parent_name and not _is_mask_path(file_path.parent)):
-            image_map[stem] = file_path
-            continue
+        base_stem = stem
+        is_mask = False
 
+        # Folder-based mask detection
         if parent_name in {"labels", "masks", "mask"} or _is_mask_path(file_path.parent):
-            mask_map[stem] = file_path
-            continue
-
-        # Fallback: if we already saw a mask with this stem, treat as image; otherwise assume image first
-        if stem in mask_map:
-            image_map[stem] = file_path
+            is_mask = True
         else:
-            image_map.setdefault(stem, file_path)
+            # Name-based mask detection (e.g., *_mask.png)
+            for suffix in mask_suffixes:
+                if stem_lower.endswith(suffix):
+                    is_mask = True
+                    base_stem = stem[: -len(suffix)]
+                    break
+
+        if is_mask:
+            mask_map[base_stem] = file_path
+        else:
+            image_map[base_stem] = file_path
 
     common = sorted(set(image_map) & set(mask_map))
     missing_images = sorted(set(mask_map) - set(image_map))
@@ -197,6 +205,10 @@ def main(argv: List[str] | None = None) -> None:
     # Resolve destination relative to the .env location (or script dir) if not absolute
     if not args.dest.is_absolute():
         args.dest = (env_dir / args.dest).resolve()
+
+    # If the destination already points to an images/masks folder, step up one level
+    if args.dest.name.lower() in {"images", "masks"}:
+        args.dest = args.dest.parent
 
     source_root = args.source_root
     if source_root is None:
