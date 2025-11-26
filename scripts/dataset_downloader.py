@@ -10,13 +10,14 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_ROOT if SCRIPT_ROOT.name != "scripts" else SCRIPT_ROOT.parent
-DEFAULT_DEST = REPO_ROOT / "datasets" / "UNET_dataset"
+DEFAULT_DEST = REPO_ROOT / "datasets" / "UNET_dataset" / "13-6-27"
 
 DEFAULT_WORKSPACE = "npk-segmentation"
 DEFAULT_PROJECT = "npk-segmentation-d40wm"
 DEFAULT_VERSION = 7
 DEFAULT_FORMAT = "png-mask-semantic"
 DEFAULT_PREFIX = "img."
+DEFAULT_MAX_PAIRS = 22
 
 def _load_env_file() -> Optional[Path]:
     """Lightweight .env loader to prime os.environ for defaults."""
@@ -146,7 +147,7 @@ def _build_defaults(env_dir: Path) -> Dict[str, object]:
     dest_env = os.getenv("ROBOFLOW_DEST") or os.getenv("ROBOFLOW_PATH")
     dest_path = Path(dest_env) if dest_env else DEFAULT_DEST
     if not dest_path.is_absolute():
-        dest_path = env_dir / dest_path
+        dest_path = (env_dir / dest_path).resolve()
 
     version_env = os.getenv("ROBOFLOW_VERSION")
     try:
@@ -176,6 +177,12 @@ def parse_args(argv: List[str], defaults: Dict[str, object]) -> argparse.Namespa
     parser.add_argument("--dest", type=Path, default=defaults["dest"], help="Where to place normalized images and masks.")
     parser.add_argument("--prefix", default=DEFAULT_PREFIX, help="Prefix for renamed files (default: img.).")
     parser.add_argument("--start-index", type=int, default=1, help="Starting index for renamed files.")
+    parser.add_argument(
+        "--max-pairs",
+        type=int,
+        default=DEFAULT_MAX_PAIRS,
+        help=f"Maximum number of image/mask pairs to copy (default: {DEFAULT_MAX_PAIRS}).",
+    )
     parser.add_argument(
         "--source-root",
         type=Path,
@@ -231,7 +238,7 @@ def main(argv: List[str] | None = None) -> None:
 
     images_dir, masks_dir = _prepare_output_dirs(args.dest, clean=not args.no_clean)
     total_copied = _copy_pairs(
-        pairs=pairs,
+        pairs=pairs[: args.max_pairs] if args.max_pairs else pairs,
         images_dir=images_dir,
         masks_dir=masks_dir,
         prefix=args.prefix,
