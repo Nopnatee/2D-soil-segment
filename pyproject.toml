@@ -40,6 +40,7 @@ soil-segment-viz = "soil_segment.visualizer:main"
 soil-segment-annotate = "scripts.annotator:main"
 soil-segment-predict = "scripts.npk_pixel_predictor:main"
 soil-segment-gradio = "scripts.gradio_app:main"
+soil-segment-export-regression = "scripts.export_regression_model:main"
 
 [tool.setuptools]
 package-dir = {"" = "src", "scripts" = "scripts"}
