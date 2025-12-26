@@ -82,7 +82,10 @@ class BeadDataset(Dataset):
         self.mask_dir = mask_dir
         self.joint_transform = joint_transform
         self.debug = debug
-        self.images = [f for f in os.listdir(image_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
+        # Sort for deterministic ordering across splits/loaders
+        self.images = sorted(
+            f for f in os.listdir(image_dir) if f.endswith(('.png', '.jpg', '.jpeg'))
+        )
 
         if self.debug:
             print(f"[BeadDataset] Found {len(self.images)} images in {image_dir}")
@@ -561,6 +564,18 @@ def create_data_loaders(data_dir, batch_size=1, img_size=1024,
                                                   random_state=random_seed, shuffle=True)
     val_indices, test_indices = train_test_split(temp_indices, train_size=val_size,
                                                 random_state=random_seed, shuffle=True)
+
+    def log_split(name, split_indices, max_display=12):
+        files = [full_dataset.images[int(i)] for i in split_indices]
+        if len(files) > max_display:
+            preview = ", ".join(files[:max_display]) + f", ... (+{len(files) - max_display} more)"
+        else:
+            preview = ", ".join(files)
+        print(f"{name}: {len(files)} files -> {preview}")
+
+    log_split("Train", train_indices)
+    log_split("Val", val_indices)
+    log_split("Test", test_indices)
 
     train_dataset = BeadDataset(
         os.path.join(data_dir, 'images'),
