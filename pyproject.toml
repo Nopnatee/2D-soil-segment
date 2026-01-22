@@ -21,7 +21,7 @@ dependencies = [
   "pillow",
   "roboflow",
   "requests",
-  "scikit-learn",
+  "scikit-learn==1.7.0",
   "seaborn",
   "torch",
   "torchvision",
