@@ -17,12 +17,16 @@ dependencies = [
   "joblib",
   "matplotlib",
   "numpy",
+  "onnx",
+  "onnxscript",
   "opencv-python",
+  "skl2onnx",
   "pillow",
   "roboflow",
   "requests",
   "scikit-learn==1.7.0",
   "seaborn",
+  "streamlit",
   "torch",
   "torchvision",
   "tqdm",
@@ -34,9 +38,6 @@ dev = [
   "pytest>=7.0",
 ]
 onnx = [
-  "onnx",
-  "onnxscript",
-  "skl2onnx",
 ]
 
 [project.scripts]
