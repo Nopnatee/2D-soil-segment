@@ -162,7 +162,7 @@ def auto_annotate(
     checkpoint: Path,
     num_classes: int = 7,
     class_names: Optional[List[str]] = None,
-    img_size: int = 512,
+    img_size: int = 1024,
     device_str: Optional[str] = None,
     skip_existing: bool = True,
     save_overlays: bool = True,
@@ -240,7 +240,12 @@ def parse_args() -> argparse.Namespace:
             "If omitted, uses checkpoints/best_model.pth when present."
         ),
     )
-    p.add_argument("--img-size", type=int, default=512, help="Inference size the model expects (square).")
+    p.add_argument(
+        "--img-size",
+        type=int,
+        default=1024,
+        help="Inference size the model expects (square, match training).",
+    )
     p.add_argument("--device", type=str, help="cpu or cuda (auto if omitted).")
     p.add_argument("--no-skip-existing", action="store_true", help="Recompute masks even if they exist.")
     p.add_argument("--no-overlays", action="store_true", help="Do not save overlay previews.")

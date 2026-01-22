@@ -349,8 +349,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--img-size",
         type=int,
-        default=512,
-        help="Square inference size expected by the checkpoint.",
+        default=1024,
+        help="Square inference size expected by the checkpoint (match training).",
     )
     parser.add_argument(
         "--device",

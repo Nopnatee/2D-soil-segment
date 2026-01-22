@@ -195,8 +195,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--img-size",
         type=int,
-        default=512,
-        help="Square image size for the U-Net export dummy input.",
+        default=1024,
+        help="Square image size for the U-Net export dummy input (match training/inference).",
     )
     parser.add_argument(
         "--regression-features",
