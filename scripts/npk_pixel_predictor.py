@@ -22,7 +22,8 @@ DEFAULT_PELLET_CLASS_NAMES: Tuple[str, ...] = (
     "White_AMP",
     "White_Boron",
     "White_Mg",
-    "Yellow_Urea",
+    "Yellow_Urea_coated",
+    "Yellow_Urea_uncoated",
 )
 
 @dataclass(frozen=True)
@@ -58,6 +59,8 @@ RAW_MATERIAL_NUTRIENTS: Dict[str, Dict[str, float]] = {
 
 CLASS_NAME_TO_RAW_MATERIAL: Dict[str, str] = {
     "yellowurea": "urea",
+    "yellowureacoated": "urea",
+    "yellowureauncoated": "urea",
     "urea": "urea",
     "blackdap": "dap",
     "dap": "dap",

@@ -677,7 +677,7 @@ def main():
         torch.backends.cudnn.deterministic = False
     
     # Create model (you'll need to define SimpleUNet or import it)
-    model = SimpleUNet(n_classes=7)
+    model = SimpleUNet(n_classes=8)
 
     paths = get_data_paths()
     dataset_dir = str(paths["unet_dataset"])
@@ -701,7 +701,7 @@ def main():
         device=device,
         train_loader=train_loader,
         val_loader=val_loader,
-        n_classes=7,
+        n_classes=8,
         debug=False  # Enable debugging
     )
 

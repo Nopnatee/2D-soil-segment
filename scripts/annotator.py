@@ -160,7 +160,7 @@ def auto_annotate(
     input_dir: Path,
     output_dataset: Path,
     checkpoint: Path,
-    num_classes: int = 7,
+    num_classes: int = 8,
     class_names: Optional[List[str]] = None,
     img_size: int = 1024,
     device_str: Optional[str] = None,
@@ -229,7 +229,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_DATASET,
         help="Root dataset directory where images/masks/overlays will be saved.",
     )
-    p.add_argument("--num-classes", type=int, default=7, help="Number of classes (IDs 0..N-1).")
+    p.add_argument("--num-classes", type=int, default=8, help="Number of classes (IDs 0..N-1).")
     p.add_argument("--class-names", nargs="*", help="Optional class names; must match --num-classes if provided.")
 
     p.add_argument(

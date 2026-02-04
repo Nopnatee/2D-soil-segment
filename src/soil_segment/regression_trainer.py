@@ -64,6 +64,8 @@ except ModuleNotFoundError:
 
     CLASS_NAME_TO_RAW_MATERIAL: Dict[str, str] = {
         "yellowurea": "urea",
+        "yellowureacoated": "urea",
+        "yellowureauncoated": "urea",
         "urea": "urea",
         "blackdap": "dap",
         "dap": "dap",
@@ -130,7 +132,8 @@ DEFAULT_CLASS_NAMES = (
     "White_AMP",
     "White_Boron",
     "White_Mg",
-    "Yellow_Urea",
+    "Yellow_Urea_coated",
+    "Yellow_Urea_uncoated",
 )
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -269,7 +272,11 @@ def process_all_images(
 
 
 def load_class_names(num_classes: int, class_json: Optional[Path] = None) -> List[str]:
-    class_file = class_json or (PROJECT_ROOT / "datasets" / "annotate" / "classes.json")
+    default_candidates = [
+        PROJECT_ROOT / "datasets" / "UNET_dataset" / "classes.json",
+        PROJECT_ROOT / "datasets" / "annotate" / "classes.json",
+    ]
+    class_file = class_json or next((p for p in default_candidates if p.exists()), default_candidates[0])
     names: List[str] = []
 
     if class_file.exists():
