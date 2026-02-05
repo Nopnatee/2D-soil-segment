@@ -87,41 +87,26 @@ RAW_MATERIAL_NUTRIENTS: Dict[str, Dict[str, float]] = {
     "boron": {"N": 0.0, "P": 0.0, "K": 0.0, "S": 0.0, "Mg": 0.0, "Br": 14.0, "Ca": 16.0},
 }
 
-# Updated class name mapping to match new naming convention
-CLASS_NAME_TO_RAW_MATERIAL: Dict[str, str] = {
-    # Yellow Urea variants
-    "yellowurea": "urea",
-    "yellowureacoated": "urea",
-    "yellowureauncoated": "urea",
-    "urea": "urea",
-    
-    # Black DAP variants
-    "blackdap": "dap",
-    "dap": "dap",
-    
-    # Red MOP variants
-    "redmop": "mop",
-    "mop": "mop",
-    
-    # White AMP variants
-    "whiteamp": "amp",
-    "amp": "amp",
-    "whiteammoniumsulphate": "amp",
-    "whiteammoniumsulfate": "amp",
-    
-    # White Boron variants
-    "whiteboron": "boron",
-    "boron": "boron",
-    
-    # White Mg variants
-    "whitemg": "mg",
-    "mg": "mg",
-}
-
-
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
+    CLASS_NAME_TO_RAW_MATERIAL: Dict[str, str] = {
+        "yellowurea": "urea",
+        "urea": "urea",
+        "blackdap": "dap",
+        "dap": "dap",
+        "redmop": "mop",
+        "mop": "mop",
+        "whiteamp": "ammoniumsulphate",
+        "whiteams": "ammoniumsulphate",
+        "whiteammoniumsulphate": "ammoniumsulphate",
+        "whiteammoniumsulfate": "ammoniumsulphate",
+        "ammoniumsulphate": "ammoniumsulphate",
+        "ammoniumsulfate": "ammoniumsulphate",
+        "amp": "ammoniumsulphate",
+        "whiteboron": "br",
+        "boron": "br",
+        "br": "br",
+        "whitemg": "mg",
+        "mg": "mg",
+    }
 
 def _normalize_class_name(name: str) -> str:
     """Remove all non-alphanumeric characters and lowercase"""
@@ -174,9 +159,22 @@ def calculate_nutrient_breakdown(stats: Sequence[ClassStat]) -> NutrientBreakdow
     return NutrientBreakdown(totals=totals, per_class=per_class, unmapped_classes=unmapped)
 
 
-# ============================================================================
-# MODEL LOADING AND INFERENCE
-# ============================================================================
+DEFAULT_CLASS_NAMES = (
+    "background",
+    "Black_DAP",
+    "Red_MOP",
+    "White_AMP",
+    "White_Boron",
+    "White_Mg",
+    "Yellow_Urea",
+)
+
+_IMAGENET_MEAN = [0.485, 0.456, 0.406]
+_IMAGENET_STD = [0.229, 0.224, 0.225]
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+
+DEFAULT_BEAD_MASKS = 6
+
 
 def resolve_checkpoint_path(path: Optional[Path]) -> Path:
     """
@@ -302,11 +300,6 @@ def predict_with_unet(
 # ============================================================================
 
 def load_class_names(num_classes: int, class_json: Optional[Path] = None) -> List[str]:
-    """
-    Load class names with proper fallback logic
-    
-    Updated to match training script defaults
-    """
     class_file = class_json or (PROJECT_ROOT / "datasets" / "annotate" / "classes.json")
     names: List[str] = []
 
