@@ -65,8 +65,7 @@ DEFAULT_CLASS_NAMES = (
     "White_AMP",
     "White_Boron",
     "White_Mg",
-    "Yellow_Urea_coated",
-    "Yellow_Urea_uncoated",
+    "Yellow_Urea",
 )
 DEFAULT_CLASS_COLORS = [
     (0, 0, 0),        # background - black
@@ -75,8 +74,7 @@ DEFAULT_CLASS_COLORS = [
     (135, 206, 250),  # White_AMP - light sky blue
     (255, 182, 193),  # White_Boron - light pink
     (144, 238, 144),  # White_Mg - light green
-    (255, 215, 0),    # Yellow_Urea_coated - gold
-    (240, 230, 140),  # Yellow_Urea_uncoated - khaki
+    (255, 215, 0),    # Yellow_Urea - gold
 ]
 
 
@@ -151,7 +149,7 @@ def predict_img(
     dataset_dir: str,
     *,
     img_size: int = 1024,
-    n_classes: int = 8,
+    n_classes: int = 7,
     device: Optional[str] = None,
     class_names: Optional[Sequence[str]] = None,
 ) -> None:
@@ -438,8 +436,8 @@ def main():
     parser.add_argument(
         "--n-classes",
         type=int,
-        default=8,
-        help="Number of segmentation classes for the model (defaults to 8).",
+        default=7,
+        help="Number of segmentation classes for the model (defaults to 7).",
     )
     parser.add_argument(
         "--device",

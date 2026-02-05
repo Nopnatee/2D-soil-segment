@@ -1,5 +1,5 @@
 {
-  "num_classes": 8,
+  "num_classes": 7,
   "class_names": [
     "background",
     "Black_DAP",
@@ -7,7 +7,6 @@
     "White_AMP",
     "White_Boron",
     "White_Mg",
-    "Yellow_Urea_coated",
-    "Yellow_Urea_uncoated"
+    "Yellow_Urea"
   ]
 }
