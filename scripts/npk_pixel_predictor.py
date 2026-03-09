@@ -22,7 +22,8 @@ DEFAULT_PELLET_CLASS_NAMES: Tuple[str, ...] = (
     "White_AMP",
     "White_Boron",
     "White_Mg",
-    "Yellow_Urea",
+    "Yellow_Urea_coated",
+    "Yellow_Urea_uncoated",
 )
 
 @dataclass(frozen=True)

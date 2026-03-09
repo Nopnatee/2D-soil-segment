@@ -17,6 +17,18 @@ import seaborn as sns
 import time
 import random
 
+CLASS_NAMES = (
+    'background',
+    'Black_DAP',
+    'Red_MOP',
+    'White_AMP',
+    'White_Boron',
+    'White_Mg',
+    'Yellow_Urea_coated',
+    'Yellow_Urea_uncoated',
+)
+N_CLASSES = len(CLASS_NAMES)
+
 # Support running as a script or within the package
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -262,7 +274,7 @@ class IoUScore(nn.Module):
 class SegmentationTrainer:
     """Training pipeline for UNet with proper handling of small datasets"""
     
-    def __init__(self, model, device, train_loader, val_loader, n_classes=7, 
+    def __init__(self, model, device, train_loader, val_loader, n_classes=N_CLASSES, 
                  learning_rate=1e-3, weight_decay=1e-4):
         self.model = model.to(device)
         self.device = device
@@ -560,7 +572,17 @@ class SegmentationTrainer:
     def evaluate_model(self, test_loader, class_names=None):
         """Comprehensive model evaluation"""
         if class_names is None:
-            class_names = [f'Class {i}' for i in range(self.n_classes)]
+            if self.n_classes == len(CLASS_NAMES):
+                class_names = list(CLASS_NAMES)
+            else:
+                class_names = [f'Class {i}' for i in range(self.n_classes)]
+        else:
+            class_names = list(class_names)
+            if len(class_names) < self.n_classes:
+                class_names.extend(
+                    [f'Class {i}' for i in range(len(class_names), self.n_classes)]
+                )
+            class_names = class_names[:self.n_classes]
         
         self.model.eval()
         all_predictions = []
@@ -586,15 +608,17 @@ class SegmentationTrainer:
         print("\n" + "="*70)
         print("Classification Report:")
         print("="*70)
+        labels = list(range(self.n_classes))
         print(classification_report(
             all_targets, 
             all_predictions, 
+            labels=labels,
             target_names=class_names,
             zero_division=0
         ))
         
         # Confusion matrix
-        cm = confusion_matrix(all_targets, all_predictions)
+        cm = confusion_matrix(all_targets, all_predictions, labels=labels)
         
         plt.figure(figsize=(10, 8))
         sns.heatmap(
@@ -749,14 +773,11 @@ def visualize_predictions(model, dataset, device, num_samples=4,
     model.eval()
     
     # Color map for visualization
-    n_classes = 7
+    n_classes = N_CLASSES
     colors = plt.cm.get_cmap('tab10', n_classes)
     
     if class_names is None:
-        class_names = [
-            'Black_DAP', 'Red_MOP', 'White_AMP', 'White_Boron',
-            'White_Mg', 'Yellow_Urea_coated', 'Yellow_Urea_uncoated'
-        ]
+        class_names = list(CLASS_NAMES)
     
     # Randomly sample indices
     indices = random.sample(range(len(dataset)), min(num_samples, len(dataset)))
@@ -813,7 +834,7 @@ def visualize_predictions(model, dataset, device, num_samples=4,
     plt.show()
 
 
-def verify_dataset_classes(data_dir, expected_classes=7):
+def verify_dataset_classes(data_dir, expected_classes=N_CLASSES):
     """Verify that all masks have the correct class labels"""
     print("\n" + "="*70)
     print("Verifying Dataset Classes")
@@ -885,7 +906,7 @@ def main():
     checkpoints_dir = str(paths["checkpoints"])
     
     # Verify dataset first
-    verify_dataset_classes(dataset_dir, expected_classes=7)
+    verify_dataset_classes(dataset_dir, expected_classes=N_CLASSES)
     
     # Create data loaders - FIXED VERSION
     train_loader, val_loader, test_loader = create_data_loaders(
@@ -900,7 +921,7 @@ def main():
     )
     
     # Create model
-    model = SimpleUNet(n_classes=7)
+    model = SimpleUNet(n_classes=N_CLASSES)
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -913,7 +934,7 @@ def main():
         device=device,
         train_loader=train_loader,
         val_loader=val_loader,
-        n_classes=7,
+        n_classes=N_CLASSES,
         learning_rate=1e-3,
         weight_decay=1e-4
     )
@@ -931,10 +952,7 @@ def main():
     )
     
     # Evaluate on test set
-    class_names = [
-        'Black_DAP', 'Red_MOP', 'White_AMP', 'White_Boron',
-        'White_Mg', 'Yellow_Urea_coated', 'Yellow_Urea_uncoated'
-    ]
+    class_names = list(CLASS_NAMES)
     trainer.evaluate_model(test_loader, class_names=class_names)
     
     # Visualize predictions
