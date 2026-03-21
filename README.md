@@ -37,3 +37,44 @@
 - `python cli.py train` - delegates to `soil_segment.unet_trainer:main`.
 - `python cli.py viz checkpoints` – delegates to `soil_segment.visualizer:main`.
 - `cli.py` is the only root-level wrapper.
+
+**Uncoated Mode**
+
+- Use uncoated mode to keep datasets, checkpoints, and model files separate from the default workflow.
+- UNet uncoated dataset path: `datasets/UNET_dataset_uncoated`.
+- Regression uncoated dataset path: `datasets/regression_dataset_uncoated`.
+- Uncoated checkpoints/output path: `checkpoints_uncoated`.
+
+**Uncoated Commands**
+
+- Train UNet uncoated model:
+  - `python cli.py train --uncoated`
+  - Behavior in uncoated mode:
+    - Leave-one-out cross-validation (5 folds for 5 images)
+    - Train on 4 images, validate on 1 image, rotate folds
+    - Random patch sampling (strong augmentation) instead of full-image-only training
+    - Class-imbalance loss: weighted CrossEntropy + Dice
+- Train regression model using uncoated dataset/checkpoint:
+  - `python -m soil_segment.regression_trainer --uncoated`
+  - Optional tuning flags for uncoated UNet:
+    - `--uncoated-patch-size` (default `512`)
+    - `--uncoated-patches-per-image` (default `64`)
+    - `--uncoated-batch-size` (default `4`)
+    - `--uncoated-epochs` (default `160`)
+    - `--uncoated-patience` (default `30`)
+    - `--uncoated-learning-rate` (default `1e-4`)
+    - `--uncoated-weight-decay` (default `1e-4`)
+    - `--uncoated-init-checkpoint` (warm-start source; default auto-uses `checkpoints/best_model.pth` when available)
+
+**Uncoated Output Files**
+
+- `checkpoints_uncoated/best_model_fold<F>_uncoated.pth`
+- `checkpoints_uncoated/checkpoint_epoch_<N>_fold<F>_uncoated.pth`
+- `checkpoints_uncoated/loo_cv_summary_uncoated.json` (includes per-fold and mean Dice)
+- `checkpoints_uncoated/regression_model_uncoated.pkl`
+
+**Overwrite Behavior**
+
+- Running default mode updates files in `checkpoints/` only.
+- Running `--uncoated` updates files in `checkpoints_uncoated/` only.
+- `best_model.pth` and `best_model_uncoated.pth` are isolated from each other.

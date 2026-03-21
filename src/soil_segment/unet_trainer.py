@@ -1,5 +1,8 @@
+import argparse
 import sys
 from pathlib import Path
+import copy
+import json
 
 import torch
 import torch.nn as nn
@@ -11,11 +14,13 @@ from tqdm import tqdm
 import os
 from PIL import Image
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as TF
 from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.model_selection import train_test_split
 import seaborn as sns
 import time
 import random
+from typing import Optional
 
 CLASS_NAMES = (
     'background',
@@ -28,6 +33,22 @@ CLASS_NAMES = (
     'Yellow_Urea_uncoated',
 )
 N_CLASSES = len(CLASS_NAMES)
+
+
+def get_class_names(n_classes):
+    """Return class names trimmed/padded to match n_classes."""
+    if n_classes <= len(CLASS_NAMES):
+        return list(CLASS_NAMES[:n_classes])
+    return list(CLASS_NAMES) + [
+        f'Class {i}' for i in range(len(CLASS_NAMES), n_classes)
+    ]
+
+
+def append_name_suffix(path: Path, suffix: str) -> Path:
+    """Append a suffix to the final path segment name."""
+    if not suffix:
+        return path
+    return path.with_name(f"{path.name}{suffix}")
 
 # Support running as a script or within the package
 if __package__ is None or __package__ == "":
@@ -181,29 +202,8 @@ class TransformSubset(Dataset):
         return len(self.indices)
     
     def __getitem__(self, idx):
-        # Get original data without transform
         original_idx = self.indices[idx]
-        img_name = self.dataset.images[original_idx]
-        img_path = os.path.join(self.dataset.image_dir, img_name)
-        
-        # Find mask
-        mask_path = os.path.join(self.dataset.mask_dir, img_name)
-        if not os.path.exists(mask_path):
-            base_name = os.path.splitext(img_name)[0]
-            for ext in ['.png', '.jpg', '.jpeg']:
-                mask_path = os.path.join(self.dataset.mask_dir, base_name + ext)
-                if os.path.exists(mask_path):
-                    break
-        
-        # Load fresh
-        image = Image.open(img_path).convert('RGB')
-        mask = Image.open(mask_path)
-        
-        # Convert mask
-        mask_array = np.array(mask)
-        if len(mask_array.shape) > 2:
-            mask_array = mask_array[:, :, 0]
-        mask = Image.fromarray(mask_array.astype(np.uint8), mode='L')
+        image, mask = load_image_mask_pair(self.dataset, original_idx)
         
         # Apply this subset's specific transform
         if self.transform:
@@ -212,15 +212,150 @@ class TransformSubset(Dataset):
         return image, mask
 
 
+def load_image_mask_pair(dataset, original_idx):
+    """Load a raw image/mask pair from the base dataset by absolute index."""
+    img_name = dataset.images[original_idx]
+    img_path = os.path.join(dataset.image_dir, img_name)
+
+    mask_path = os.path.join(dataset.mask_dir, img_name)
+    if not os.path.exists(mask_path):
+        base_name = os.path.splitext(img_name)[0]
+        for ext in ['.png', '.jpg', '.jpeg']:
+            mask_path = os.path.join(dataset.mask_dir, base_name + ext)
+            if os.path.exists(mask_path):
+                break
+        else:
+            raise FileNotFoundError(
+                f"No mask found for image {img_name} in {dataset.mask_dir}"
+            )
+
+    image = Image.open(img_path).convert('RGB')
+    mask = Image.open(mask_path)
+
+    mask_array = np.array(mask)
+    if len(mask_array.shape) > 2:
+        mask_array = mask_array[:, :, 0]
+    mask = Image.fromarray(mask_array.astype(np.uint8), mode='L')
+
+    return image, mask
+
+
+class RandomPatchDataset(Dataset):
+    """Patch-based dataset with stronger augmentation for tiny-data training."""
+
+    def __init__(self, dataset, indices, patch_size=512, patches_per_image=64):
+        self.dataset = dataset
+        self.indices = list(indices)
+        self.patch_size = int(patch_size)
+        self.patches_per_image = int(patches_per_image)
+        self.to_tensor = transforms.ToTensor()
+        self.normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+        self.color_jitter = transforms.ColorJitter(
+            brightness=0.2,
+            contrast=0.2,
+            saturation=0.15,
+            hue=0.03,
+        )
+
+    def __len__(self):
+        return len(self.indices) * self.patches_per_image
+
+    def _apply_strong_augmentations(self, image, mask):
+        # Flips
+        if random.random() < 0.5:
+            image = TF.hflip(image)
+            mask = TF.hflip(mask)
+        if random.random() < 0.5:
+            image = TF.vflip(image)
+            mask = TF.vflip(mask)
+
+        # Mild affine geometry perturbation
+        if random.random() < 0.8:
+            angle, translations, scale, shear = transforms.RandomAffine.get_params(
+                degrees=(-20, 20),
+                translate=(0.08, 0.08),
+                scale_ranges=(0.9, 1.1),
+                shears=(-5, 5),
+                img_size=image.size,
+            )
+            image = TF.affine(
+                image,
+                angle=angle,
+                translate=translations,
+                scale=scale,
+                shear=shear,
+                interpolation=transforms.InterpolationMode.BILINEAR,
+                fill=(0, 0, 0),
+            )
+            mask = TF.affine(
+                mask,
+                angle=angle,
+                translate=translations,
+                scale=scale,
+                shear=shear,
+                interpolation=transforms.InterpolationMode.NEAREST,
+                fill=0,
+            )
+
+        if random.random() < 0.7:
+            image = self.color_jitter(image)
+
+        if random.random() < 0.35:
+            from PIL import ImageFilter
+            image = image.filter(
+                ImageFilter.GaussianBlur(radius=random.uniform(0.2, 1.2))
+            )
+
+        return image, mask
+
+    def _random_crop(self, image, mask):
+        width, height = image.size
+
+        if width < self.patch_size or height < self.patch_size:
+            resize_w = max(width, self.patch_size)
+            resize_h = max(height, self.patch_size)
+            image = image.resize((resize_w, resize_h), Image.BILINEAR)
+            mask = mask.resize((resize_w, resize_h), Image.NEAREST)
+            width, height = image.size
+
+        max_left = width - self.patch_size
+        max_top = height - self.patch_size
+        left = 0 if max_left <= 0 else random.randint(0, max_left)
+        top = 0 if max_top <= 0 else random.randint(0, max_top)
+
+        image = TF.crop(image, top, left, self.patch_size, self.patch_size)
+        mask = TF.crop(mask, top, left, self.patch_size, self.patch_size)
+        return image, mask
+
+    def __getitem__(self, idx):
+        original_idx = self.indices[idx % len(self.indices)]
+        image, mask = load_image_mask_pair(self.dataset, original_idx)
+
+        image, mask = self._apply_strong_augmentations(image, mask)
+        image, mask = self._random_crop(image, mask)
+
+        image = self.to_tensor(image)
+        if random.random() < 0.3:
+            image = (image + torch.randn_like(image) * random.uniform(0.01, 0.03)).clamp(0, 1)
+        image = self.normalize(image)
+
+        mask = torch.from_numpy(np.array(mask)).long()
+        return image, mask
+
+
 # ============================================================================
 # METRICS
 # ============================================================================
 class DiceScore(nn.Module):
     """Dice coefficient for multi-class segmentation"""
-    def __init__(self, num_classes, smooth=1e-6):
+    def __init__(self, num_classes, smooth=1e-6, ignore_empty_target=False):
         super().__init__()
         self.num_classes = num_classes
         self.smooth = smooth
+        self.ignore_empty_target = ignore_empty_target
     
     def forward(self, pred, target):
         """
@@ -233,22 +368,28 @@ class DiceScore(nn.Module):
         for i in range(self.num_classes):
             pred_i = pred[:, i]
             target_i = (target == i).float()
+
+            if self.ignore_empty_target and target_i.sum() <= 0:
+                continue
             
             intersection = (pred_i * target_i).sum()
             union = pred_i.sum() + target_i.sum()
             
             dice = (2 * intersection + self.smooth) / (union + self.smooth)
             dice_scores.append(dice)
-        
+
+        if not dice_scores:
+            return pred.new_tensor(0.0)
         return torch.stack(dice_scores).mean()
 
 
 class IoUScore(nn.Module):
     """Intersection over Union for multi-class segmentation"""
-    def __init__(self, num_classes, smooth=1e-6):
+    def __init__(self, num_classes, smooth=1e-6, ignore_empty_target=False):
         super().__init__()
         self.num_classes = num_classes
         self.smooth = smooth
+        self.ignore_empty_target = ignore_empty_target
     
     def forward(self, pred, target):
         pred = F.softmax(pred, dim=1)
@@ -258,14 +399,60 @@ class IoUScore(nn.Module):
         for i in range(self.num_classes):
             pred_i = (pred == i)
             target_i = (target == i)
+
+            if self.ignore_empty_target and target_i.float().sum() <= 0:
+                continue
             
             intersection = (pred_i & target_i).float().sum()
             union = (pred_i | target_i).float().sum()
             
             iou = (intersection + self.smooth) / (union + self.smooth)
             iou_scores.append(iou)
-        
+
+        if not iou_scores:
+            return pred.new_tensor(0.0)
         return torch.stack(iou_scores).mean()
+
+
+class WeightedCrossEntropyDiceLoss(nn.Module):
+    """Weighted CE + Dice loss for imbalanced multi-class segmentation."""
+
+    def __init__(
+        self,
+        num_classes,
+        class_weights: Optional[torch.Tensor] = None,
+        ce_ratio=0.6,
+        dice_ratio=0.4,
+        smooth=1e-6,
+    ):
+        super().__init__()
+        self.num_classes = int(num_classes)
+        self.ce_ratio = float(ce_ratio)
+        self.dice_ratio = float(dice_ratio)
+        self.smooth = float(smooth)
+
+        if class_weights is None:
+            self.register_buffer("class_weights", torch.ones(self.num_classes))
+        else:
+            self.register_buffer("class_weights", class_weights.float())
+
+    def forward(self, logits, target):
+        ce = F.cross_entropy(logits, target, weight=self.class_weights)
+
+        probs = F.softmax(logits, dim=1)
+        target_1hot = F.one_hot(target, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+
+        dims = (0, 2, 3)
+        intersection = (probs * target_1hot).sum(dim=dims)
+        union = probs.sum(dim=dims) + target_1hot.sum(dim=dims)
+        dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
+
+        # Weighted mean dice: classes absent from training weights contribute 0.
+        weight_sum = self.class_weights.sum().clamp_min(1e-8)
+        dice_mean = (dice * self.class_weights).sum() / weight_sum
+        dice_loss = 1.0 - dice_mean
+
+        return self.ce_ratio * ce + self.dice_ratio * dice_loss
 
 
 # ============================================================================
@@ -275,7 +462,8 @@ class SegmentationTrainer:
     """Training pipeline for UNet with proper handling of small datasets"""
     
     def __init__(self, model, device, train_loader, val_loader, n_classes=N_CLASSES, 
-                 learning_rate=1e-3, weight_decay=1e-4):
+                 learning_rate=1e-3, weight_decay=1e-4, criterion=None,
+                 ignore_empty_classes=False):
         self.model = model.to(device)
         self.device = device
         self.train_loader = train_loader
@@ -283,9 +471,9 @@ class SegmentationTrainer:
         self.n_classes = n_classes
         
         # Loss and metrics
-        self.criterion = nn.CrossEntropyLoss()
-        self.dice_metric = DiceScore(n_classes)
-        self.iou_metric = IoUScore(n_classes)
+        self.criterion = criterion.to(device) if criterion is not None else nn.CrossEntropyLoss()
+        self.dice_metric = DiceScore(n_classes, ignore_empty_target=ignore_empty_classes)
+        self.iou_metric = IoUScore(n_classes, ignore_empty_target=ignore_empty_classes)
         
         # Optimizer with proper weight decay for regularization
         self.optimizer = torch.optim.AdamW(
@@ -393,9 +581,16 @@ class SegmentationTrainer:
         
         return avg_loss, avg_dice, avg_iou
     
-    def train(self, num_epochs, save_dir='checkpoints', early_stopping_patience=50):
+    def train(
+        self,
+        num_epochs,
+        save_dir='checkpoints',
+        early_stopping_patience=50,
+        model_suffix='',
+    ):
         """Full training loop with early stopping"""
         os.makedirs(save_dir, exist_ok=True)
+        best_model_name = f"best_model{model_suffix}.pth"
         
         print(f"\n{'='*70}")
         print(f"Training Configuration:")
@@ -440,7 +635,7 @@ class SegmentationTrainer:
                 self.best_dice = val_dice
                 self.best_epoch = epoch
                 self.patience_counter = 0
-                self.best_model_state = self.model.state_dict().copy()
+                self.best_model_state = copy.deepcopy(self.model.state_dict())
                 
                 # Save best model
                 torch.save({
@@ -450,7 +645,7 @@ class SegmentationTrainer:
                     'scheduler_state_dict': self.scheduler.state_dict(),
                     'best_dice': self.best_dice,
                     'history': self.history
-                }, os.path.join(save_dir, 'best_model.pth'))
+                }, os.path.join(save_dir, best_model_name))
             else:
                 self.patience_counter += 1
             
@@ -462,7 +657,7 @@ class SegmentationTrainer:
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'scheduler_state_dict': self.scheduler.state_dict(),
                     'history': self.history
-                }, os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}.pth'))
+                }, os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}{model_suffix}.pth'))
             
             # Print progress
             epoch_time = time.time() - epoch_start
@@ -472,7 +667,7 @@ class SegmentationTrainer:
             status += f" | LR:{current_lr:.6f} | {epoch_time:.1f}s"
             
             if is_best:
-                status += " ⭐ BEST"
+                status += " [BEST]"
             
             print(status)
             
@@ -572,10 +767,7 @@ class SegmentationTrainer:
     def evaluate_model(self, test_loader, class_names=None):
         """Comprehensive model evaluation"""
         if class_names is None:
-            if self.n_classes == len(CLASS_NAMES):
-                class_names = list(CLASS_NAMES)
-            else:
-                class_names = [f'Class {i}' for i in range(self.n_classes)]
+            class_names = get_class_names(self.n_classes)
         else:
             class_names = list(class_names)
             if len(class_names) < self.n_classes:
@@ -758,6 +950,264 @@ def create_data_loaders(data_dir, batch_size=2, img_size=1024,
     return train_loader, val_loader, test_loader
 
 
+def compute_class_weights_from_indices(dataset, indices, n_classes):
+    """Compute inverse-frequency class weights from a subset of masks."""
+    pixel_counts = np.zeros(int(n_classes), dtype=np.float64)
+
+    for original_idx in indices:
+        _, mask = load_image_mask_pair(dataset, original_idx)
+        mask_np = np.array(mask).astype(np.int64)
+        bincount = np.bincount(mask_np.flatten(), minlength=n_classes)
+        pixel_counts += bincount[:n_classes]
+
+    total_pixels = float(pixel_counts.sum())
+    weights = np.zeros(int(n_classes), dtype=np.float32)
+    present = pixel_counts > 0
+    if total_pixels > 0 and present.any():
+        weights[present] = total_pixels / (n_classes * pixel_counts[present])
+        weights[present] = weights[present] / max(weights[present].mean(), 1e-8)
+        weights[present] = np.clip(weights[present], 0.25, 6.0)
+    else:
+        weights[:] = 1.0
+
+    return torch.tensor(weights, dtype=torch.float32), pixel_counts
+
+
+def create_uncoated_fold_loaders(
+    base_dataset,
+    train_indices,
+    val_indices,
+    batch_size=4,
+    patch_size=512,
+    patches_per_image=64,
+    num_workers=0,
+):
+    """Create patch-based train loader and deterministic full-image val loader."""
+    train_dataset = RandomPatchDataset(
+        base_dataset,
+        train_indices,
+        patch_size=patch_size,
+        patches_per_image=patches_per_image,
+    )
+    val_dataset = TransformSubset(
+        base_dataset,
+        val_indices,
+        transform=JointTransform(img_size=patch_size, is_training=False),
+    )
+
+    pin_memory = torch.cuda.is_available()
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=False,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+    return train_loader, val_loader
+
+
+def initialize_model_from_checkpoint(model, checkpoint_path):
+    """Load compatible weights from a checkpoint (supports class-count mismatch)."""
+    if checkpoint_path is None:
+        return
+
+    checkpoint_path = Path(checkpoint_path).expanduser().resolve()
+    if not checkpoint_path.exists():
+        print(f"[WARN] Init checkpoint not found, training from scratch: {checkpoint_path}")
+        return
+
+    checkpoint = torch.load(str(checkpoint_path), map_location='cpu')
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
+    model_state = model.state_dict()
+
+    compatible = {}
+    skipped = []
+    for key, value in state_dict.items():
+        if key in model_state and model_state[key].shape == value.shape:
+            compatible[key] = value
+        else:
+            skipped.append(key)
+
+    model.load_state_dict(compatible, strict=False)
+    print(
+        f"[Init] Loaded {len(compatible)}/{len(model_state)} tensors from "
+        f"{checkpoint_path.name}"
+    )
+    if skipped:
+        print(f"[Init] Skipped incompatible tensors: {len(skipped)}")
+
+
+def run_uncoated_leave_one_out_cv(
+    dataset_dir,
+    checkpoints_dir,
+    device,
+    n_classes,
+    class_names,
+    model_suffix="_uncoated",
+    patch_size=512,
+    patches_per_image=64,
+    batch_size=4,
+    num_epochs=160,
+    early_stopping_patience=30,
+    learning_rate=1e-4,
+    weight_decay=1e-4,
+    random_seed=42,
+    num_workers=0,
+    init_checkpoint_path=None,
+):
+    """Run leave-one-out CV with patch-based training for uncoated data."""
+    base_dataset = BeadDataset(
+        os.path.join(dataset_dir, 'images'),
+        os.path.join(dataset_dir, 'masks'),
+        transform=None,
+        debug=False,
+    )
+    total_samples = len(base_dataset)
+    if total_samples < 2:
+        raise RuntimeError(
+            f"Uncoated LOO-CV requires at least 2 images, found {total_samples}"
+        )
+
+    print("\n" + "=" * 70)
+    print("Uncoated Leave-One-Out Cross Validation")
+    print("=" * 70)
+    print(f"Total images: {total_samples}")
+    print(f"Patch size: {patch_size}")
+    print(f"Patches/image/epoch: {patches_per_image}")
+    print(f"Batch size: {batch_size}")
+    print(f"Epochs: {num_epochs}")
+    print(f"Early stopping patience: {early_stopping_patience}")
+    print("=" * 70 + "\n")
+
+    os.makedirs(checkpoints_dir, exist_ok=True)
+    all_indices = list(range(total_samples))
+    fold_results = []
+
+    for fold_idx, val_index in enumerate(all_indices, start=1):
+        fold_seed = random_seed + fold_idx
+        random.seed(fold_seed)
+        np.random.seed(fold_seed)
+        torch.manual_seed(fold_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(fold_seed)
+
+        train_indices = [i for i in all_indices if i != val_index]
+        val_indices = [val_index]
+        val_image_name = base_dataset.images[val_index]
+
+        print("\n" + "-" * 70)
+        print(f"Fold {fold_idx}/{total_samples}")
+        print(f"Validation image: {val_image_name}")
+        print("-" * 70)
+
+        train_loader, val_loader = create_uncoated_fold_loaders(
+            base_dataset=base_dataset,
+            train_indices=train_indices,
+            val_indices=val_indices,
+            batch_size=batch_size,
+            patch_size=patch_size,
+            patches_per_image=patches_per_image,
+            num_workers=num_workers,
+        )
+
+        class_weights, pixel_counts = compute_class_weights_from_indices(
+            base_dataset, train_indices, n_classes
+        )
+        print(f"Class weights: {class_weights.tolist()}")
+        print(f"Train pixel counts: {pixel_counts.astype(np.int64).tolist()}")
+
+        criterion = WeightedCrossEntropyDiceLoss(
+            num_classes=n_classes,
+            class_weights=class_weights,
+            ce_ratio=0.6,
+            dice_ratio=0.4,
+        )
+
+        model = SimpleUNet(n_classes=n_classes)
+        initialize_model_from_checkpoint(model, init_checkpoint_path)
+        trainer = SegmentationTrainer(
+            model=model,
+            device=device,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            n_classes=n_classes,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            criterion=criterion,
+            ignore_empty_classes=True,
+        )
+
+        fold_model_suffix = f"_fold{fold_idx}{model_suffix}"
+        trainer.train(
+            num_epochs=num_epochs,
+            save_dir=checkpoints_dir,
+            early_stopping_patience=early_stopping_patience,
+            model_suffix=fold_model_suffix,
+        )
+
+        fold_result = {
+            "fold": fold_idx,
+            "val_image": val_image_name,
+            "best_val_dice": float(trainer.best_dice),
+            "best_epoch": int(trainer.best_epoch + 1),
+            "class_weights": [float(x) for x in class_weights.tolist()],
+            "train_pixel_counts": [int(x) for x in pixel_counts.astype(np.int64).tolist()],
+        }
+        fold_results.append(fold_result)
+
+    best_dice_values = np.array([f["best_val_dice"] for f in fold_results], dtype=np.float64)
+    summary = {
+        "mode": "uncoated_leave_one_out_cv",
+        "folds": total_samples,
+        "mean_best_val_dice": float(best_dice_values.mean()),
+        "std_best_val_dice": float(best_dice_values.std(ddof=0)),
+        "min_best_val_dice": float(best_dice_values.min()),
+        "max_best_val_dice": float(best_dice_values.max()),
+        "fold_results": fold_results,
+        "config": {
+            "patch_size": int(patch_size),
+            "patches_per_image": int(patches_per_image),
+            "batch_size": int(batch_size),
+            "epochs": int(num_epochs),
+            "early_stopping_patience": int(early_stopping_patience),
+            "learning_rate": float(learning_rate),
+            "weight_decay": float(weight_decay),
+            "n_classes": int(n_classes),
+            "class_names": list(class_names),
+            "init_checkpoint_path": str(init_checkpoint_path) if init_checkpoint_path else None,
+        },
+    }
+
+    summary_path = Path(checkpoints_dir) / f"loo_cv_summary{model_suffix}.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+
+    print("\n" + "=" * 70)
+    print("LOO-CV Summary (Best Val Dice per fold)")
+    for fold in fold_results:
+        print(
+            f"  Fold {fold['fold']}: "
+            f"{fold['best_val_dice']:.4f} "
+            f"(epoch {fold['best_epoch']}, val image={fold['val_image']})"
+        )
+    print("-" * 70)
+    print(f"Mean Dice: {summary['mean_best_val_dice']:.4f}")
+    print(f"Std Dice:  {summary['std_best_val_dice']:.4f}")
+    print(f"Min/Max:   {summary['min_best_val_dice']:.4f} / {summary['max_best_val_dice']:.4f}")
+    print(f"Saved summary: {summary_path}")
+    print("=" * 70 + "\n")
+
+    return summary
+
+
 # ============================================================================
 # VISUALIZATION
 # ============================================================================
@@ -773,11 +1223,11 @@ def visualize_predictions(model, dataset, device, num_samples=4,
     model.eval()
     
     # Color map for visualization
-    n_classes = N_CLASSES
+    n_classes = model.final_conv.out_channels
     colors = plt.cm.get_cmap('tab10', n_classes)
     
     if class_names is None:
-        class_names = list(CLASS_NAMES)
+        class_names = get_class_names(n_classes)
     
     # Randomly sample indices
     indices = random.sample(range(len(dataset)), min(num_samples, len(dataset)))
@@ -835,56 +1285,142 @@ def visualize_predictions(model, dataset, device, num_samples=4,
 
 
 def verify_dataset_classes(data_dir, expected_classes=N_CLASSES):
-    """Verify that all masks have the correct class labels"""
+    """Verify class labels in mask files and return sorted discovered classes."""
     print("\n" + "="*70)
     print("Verifying Dataset Classes")
     print("="*70)
-    
+
     mask_dir = os.path.join(data_dir, 'masks')
-    mask_files = sorted([f for f in os.listdir(mask_dir) 
-                        if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
-    
+    mask_files = sorted(
+        f for f in os.listdir(mask_dir)
+        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+    )
+
     all_classes = set()
     class_counts = {}
-    
+
     for mask_file in mask_files:
         mask_path = os.path.join(mask_dir, mask_file)
         mask = np.array(Image.open(mask_path))
-        
+
         if len(mask.shape) > 2:
             mask = mask[:, :, 0]
-        
+
         unique_classes = np.unique(mask)
         all_classes.update(unique_classes)
-        
+
         for cls in unique_classes:
-            class_counts[cls] = class_counts.get(cls, 0) + 1
-    
-    print(f"\nFound classes: {sorted(all_classes)}")
+            class_counts[int(cls)] = class_counts.get(int(cls), 0) + 1
+
+    found_classes = sorted(int(cls) for cls in all_classes)
+    print(f"\nFound classes: {found_classes}")
     print(f"Expected classes: {list(range(expected_classes))}")
-    
-    if set(all_classes) == set(range(expected_classes)):
-        print("✓ All classes present and correct!")
+
+    if set(found_classes) == set(range(expected_classes)):
+        print("[OK] All expected classes are present.")
     else:
-        missing = set(range(expected_classes)) - all_classes
-        extra = all_classes - set(range(expected_classes))
+        missing = set(range(expected_classes)) - set(found_classes)
+        extra = set(found_classes) - set(range(expected_classes))
         if missing:
-            print(f"⚠ Missing classes: {missing}")
+            print(f"[WARN] Missing classes: {sorted(missing)}")
         if extra:
-            print(f"⚠ Unexpected classes: {extra}")
-    
+            print(f"[WARN] Unexpected classes: {sorted(extra)}")
+
     print("\nClass distribution across dataset:")
     for cls in sorted(class_counts.keys()):
         print(f"  Class {cls}: appears in {class_counts[cls]} masks")
-    
+
     print("="*70 + "\n")
+    return found_classes
 
 
 # ============================================================================
 # MAIN TRAINING SCRIPT
 # ============================================================================
-def main():
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Train UNet segmentation model",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=None,
+        help="Path to UNet dataset directory (expects images/ and masks/)",
+    )
+    parser.add_argument(
+        "--checkpoints",
+        type=Path,
+        default=None,
+        help="Directory to save training checkpoints and plots",
+    )
+    parser.add_argument(
+        "--uncoated",
+        action="store_true",
+        help="Use dedicated *_uncoated dataset/checkpoint folders and model filenames",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed",
+    )
+    parser.add_argument(
+        "--uncoated-patch-size",
+        type=int,
+        default=512,
+        help="Patch size for uncoated patch-based training",
+    )
+    parser.add_argument(
+        "--uncoated-patches-per-image",
+        type=int,
+        default=64,
+        help="Number of random patches sampled per train image per epoch (uncoated mode)",
+    )
+    parser.add_argument(
+        "--uncoated-batch-size",
+        type=int,
+        default=4,
+        help="Batch size for uncoated mode",
+    )
+    parser.add_argument(
+        "--uncoated-epochs",
+        type=int,
+        default=160,
+        help="Epochs for each fold in uncoated leave-one-out CV",
+    )
+    parser.add_argument(
+        "--uncoated-patience",
+        type=int,
+        default=30,
+        help="Early stopping patience for uncoated leave-one-out CV",
+    )
+    parser.add_argument(
+        "--uncoated-learning-rate",
+        type=float,
+        default=1e-4,
+        help="Learning rate for uncoated leave-one-out CV",
+    )
+    parser.add_argument(
+        "--uncoated-weight-decay",
+        type=float,
+        default=1e-4,
+        help="Weight decay for uncoated leave-one-out CV",
+    )
+    parser.add_argument(
+        "--uncoated-init-checkpoint",
+        type=Path,
+        default=None,
+        help="Optional checkpoint to warm-start each uncoated fold (defaults to checkpoints/best_model.pth if present)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
     """Main training pipeline"""
+    args = parse_args(argv)
+
+    suffix = "_uncoated" if args.uncoated else ""
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -902,11 +1438,59 @@ def main():
     
     # Get paths
     paths = get_data_paths()
-    dataset_dir = str(paths["unet_dataset"])
-    checkpoints_dir = str(paths["checkpoints"])
+    default_dataset = append_name_suffix(Path(paths["unet_dataset"]), suffix)
+    default_checkpoints = append_name_suffix(Path(paths["checkpoints"]), suffix)
+
+    dataset_dir = str((args.dataset or default_dataset).expanduser().resolve())
+    checkpoints_dir = str((args.checkpoints or default_checkpoints).expanduser().resolve())
+    os.makedirs(checkpoints_dir, exist_ok=True)
+
+    best_model_name = f"best_model{suffix}.pth"
+    curves_name = f"training_curves{suffix}.png"
     
-    # Verify dataset first
-    verify_dataset_classes(dataset_dir, expected_classes=N_CLASSES)
+    # Verify dataset first and align class count to actual labels
+    found_classes = verify_dataset_classes(dataset_dir, expected_classes=N_CLASSES)
+    if not found_classes:
+        raise RuntimeError(f"No mask classes found under: {dataset_dir}")
+
+    detected_n_classes = max(found_classes) + 1
+    if detected_n_classes != N_CLASSES:
+        print(
+            f"[WARN] Configured n_classes={N_CLASSES}, "
+            f"but dataset labels require n_classes={detected_n_classes}. "
+            f"Using detected value."
+        )
+    active_n_classes = detected_n_classes
+    class_names = get_class_names(active_n_classes)
+
+    if args.uncoated:
+        init_checkpoint_path = args.uncoated_init_checkpoint
+        if init_checkpoint_path is None:
+            default_init = Path(paths["checkpoints"]) / "best_model.pth"
+            if default_init.exists():
+                init_checkpoint_path = default_init
+            else:
+                print("[WARN] No default coated checkpoint found for warm start.")
+
+        run_uncoated_leave_one_out_cv(
+            dataset_dir=dataset_dir,
+            checkpoints_dir=checkpoints_dir,
+            device=device,
+            n_classes=active_n_classes,
+            class_names=class_names,
+            model_suffix=suffix,
+            patch_size=args.uncoated_patch_size,
+            patches_per_image=args.uncoated_patches_per_image,
+            batch_size=args.uncoated_batch_size,
+            num_epochs=args.uncoated_epochs,
+            early_stopping_patience=args.uncoated_patience,
+            learning_rate=args.uncoated_learning_rate,
+            weight_decay=args.uncoated_weight_decay,
+            random_seed=args.seed,
+            num_workers=0,  # Set to 0 for Windows compatibility
+            init_checkpoint_path=init_checkpoint_path,
+        )
+        return
     
     # Create data loaders - FIXED VERSION
     train_loader, val_loader, test_loader = create_data_loaders(
@@ -921,7 +1505,7 @@ def main():
     )
     
     # Create model
-    model = SimpleUNet(n_classes=N_CLASSES)
+    model = SimpleUNet(n_classes=active_n_classes)
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -934,7 +1518,7 @@ def main():
         device=device,
         train_loader=train_loader,
         val_loader=val_loader,
-        n_classes=N_CLASSES,
+        n_classes=active_n_classes,
         learning_rate=1e-3,
         weight_decay=1e-4
     )
@@ -943,16 +1527,16 @@ def main():
     trainer.train(
         num_epochs=300,  # Can train longer with early stopping
         save_dir=checkpoints_dir,
-        early_stopping_patience=50
+        early_stopping_patience=50,
+        model_suffix=suffix,
     )
     
     # Plot training history
     trainer.plot_training_history(
-        save_path=os.path.join(checkpoints_dir, 'training_curves.png')
+        save_path=os.path.join(checkpoints_dir, curves_name)
     )
     
     # Evaluate on test set
-    class_names = list(CLASS_NAMES)
     trainer.evaluate_model(test_loader, class_names=class_names)
     
     # Visualize predictions
@@ -962,12 +1546,12 @@ def main():
         device=device,
         num_samples=4,
         class_names=class_names,
-        checkpoint_path=os.path.join(checkpoints_dir, 'best_model.pth')
+        checkpoint_path=os.path.join(checkpoints_dir, best_model_name)
     )
     
     print("\n" + "="*70)
     print("Training Complete!")
-    print(f"Best model saved to: {os.path.join(checkpoints_dir, 'best_model.pth')}")
+    print(f"Best model saved to: {os.path.join(checkpoints_dir, best_model_name)}")
     print("="*70 + "\n")
 
 

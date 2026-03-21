@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,13 @@ if __package__ in (None, ""):
 else:
     from .custom_unet import SimpleUNet
     from .config import get_data_paths
+
+
+def append_name_suffix(path: Path, suffix: str) -> Path:
+    """Append suffix to final path segment name."""
+    if not suffix:
+        return path
+    return path.with_name(f"{path.name}{suffix}")
 
 
 # ============================================================================
@@ -178,15 +186,20 @@ def calculate_nutrient_breakdown(stats: Sequence[ClassStat]) -> NutrientBreakdow
 # MODEL LOADING AND INFERENCE
 # ============================================================================
 
-def resolve_checkpoint_path(path: Optional[Path]) -> Path:
+def resolve_checkpoint_path(
+    path: Optional[Path],
+    checkpoints_dir: Optional[Path] = None,
+    model_suffix: str = "",
+) -> Path:
     """
     Resolve checkpoint path with multiple fallback locations
     """
-    checkpoints_dir = get_data_paths()["checkpoints"]
+    checkpoints_dir = checkpoints_dir or get_data_paths()["checkpoints"]
     candidates: List[Path] = []
+    best_name = f"best_model{model_suffix}.pth"
 
     if path is None:
-        candidates.append(checkpoints_dir / "best_model.pth")
+        candidates.append(checkpoints_dir / best_name)
     else:
         path = Path(path)
         candidates.append(path)
@@ -398,9 +411,13 @@ def _parse_npk_from_path(path_str: str) -> List[int]:
     
     # Check parent and grandparent directories
     for candidate in (p.parent, p.parent.parent):
-        parts = candidate.name.split("-")
-        if len(parts) == 3 and all(part.isdigit() for part in parts):
-            return list(map(int, parts))
+        # Supports names like:
+        #   14-7-35
+        #   14-7-35-uncoated
+        #   14-7-35 uncoated
+        match = re.match(r"^(\d+)-(\d+)-(\d+)(?:\b|[^0-9].*)$", candidate.name)
+        if match:
+            return [int(match.group(1)), int(match.group(2)), int(match.group(3))]
     
     raise ValueError(f"Could not parse NPK from path: {path_str}")
 
@@ -819,6 +836,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=None,
         help="Where to save regression_model.pkl",
     )
+
+    parser.add_argument(
+        "--uncoated",
+        action="store_true",
+        help="Use dedicated *_uncoated dataset/checkpoint locations and output naming",
+    )
     
     parser.add_argument(
         "--img-size",
@@ -896,6 +919,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Main regression training pipeline"""
     args = parse_args(argv)
+    suffix = "_uncoated" if args.uncoated else ""
+    paths = get_data_paths()
+    default_dataset = append_name_suffix(Path(paths["regression_dataset"]), suffix)
+    default_checkpoints = append_name_suffix(Path(paths["checkpoints"]), suffix)
+    dataset_arg = args.dataset or default_dataset
     
     # Setup device
     device = "cpu" if args.cpu else ("cuda" if torch.cuda.is_available() else "cpu")
@@ -908,7 +936,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"{'='*70}\n")
 
     # Find dataset
-    img_path_list, dataset_root = auto_detect_image_folders(args.dataset)
+    img_path_list, dataset_root = auto_detect_image_folders(dataset_arg)
     if not img_path_list or dataset_root is None:
         print("✗ No valid image folders found for regression training")
         return 1
@@ -919,7 +947,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"✓ Total images: {total_images}")
 
     # Load UNet model
-    checkpoint_path = resolve_checkpoint_path(args.checkpoint)
+    checkpoint_path = resolve_checkpoint_path(
+        args.checkpoint,
+        checkpoints_dir=default_checkpoints,
+        model_suffix=suffix,
+    )
     model, num_classes = load_unet_model(checkpoint_path, device)
 
     # Load class names
@@ -945,7 +977,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # Determine output path
     output_path = args.output
     if output_path is None:
-        output_path = get_data_paths()["checkpoints"] / "regression_model.pkl"
+        output_path = default_checkpoints / f"regression_model{suffix}.pkl"
 
     # Train regressor
     regressor, metrics, holdout_results = train_regressor_with_holdout(
