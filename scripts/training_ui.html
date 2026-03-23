@@ -1,0 +1,1150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NPK Soil Segment — Training Interface</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" />
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg0: #080b10;
+  --bg1: #0e1118;
+  --bg2: #141720;
+  --bg3: #1c2030;
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.13);
+  --text0: #f0f2f5;
+  --text1: #9aa3b2;
+  --text2: #5c6478;
+  --green: #00d4aa;
+  --green-dim: rgba(0,212,170,0.12);
+  --green-dim2: rgba(0,212,170,0.06);
+  --amber: #f5a623;
+  --amber-dim: rgba(245,166,35,0.12);
+  --amber-dim2: rgba(245,166,35,0.06);
+  --red: #e05555;
+  --red-dim: rgba(224,85,85,0.12);
+  --blue: #4fa3e8;
+  --font-mono: 'IBM Plex Mono', monospace;
+  --font-sans: 'IBM Plex Sans', sans-serif;
+  --radius: 8px;
+  --radius-lg: 12px;
+}
+
+html, body { height: 100%; background: var(--bg0); color: var(--text0); font-family: var(--font-sans); font-size: 14px; }
+
+#app { display: flex; height: 100vh; overflow: hidden; }
+
+/* ---- Sidebar ---- */
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow-y: auto;
+}
+.sidebar-logo {
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-logo .logo-main {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--green);
+  letter-spacing: 0.04em;
+}
+.sidebar-logo .logo-sub {
+  font-size: 11px;
+  color: var(--text2);
+  margin-top: 3px;
+  letter-spacing: 0.02em;
+}
+
+.nav-section { padding: 14px 10px 6px; }
+.nav-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text2);
+  padding: 0 8px;
+  margin-bottom: 4px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text1);
+  font-size: 13px;
+  font-weight: 400;
+  transition: background 0.12s, color 0.12s;
+  user-select: none;
+}
+.nav-item:hover { background: var(--bg3); color: var(--text0); }
+.nav-item.active { background: var(--green-dim); color: var(--green); font-weight: 500; }
+.nav-item.active-amber { background: var(--amber-dim); color: var(--amber); font-weight: 500; }
+.nav-icon { width: 16px; height: 16px; opacity: 0.7; flex-shrink: 0; }
+.nav-item.active .nav-icon, .nav-item.active-amber .nav-icon { opacity: 1; }
+
+.sidebar-bottom {
+  margin-top: auto;
+  padding: 12px 10px;
+  border-top: 1px solid var(--border);
+}
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.status-pill.idle { background: var(--bg3); color: var(--text2); }
+.status-pill.running { background: var(--green-dim); color: var(--green); }
+.status-pill.running-reg { background: var(--amber-dim); color: var(--amber); }
+.status-pill.error { background: var(--red-dim); color: var(--red); }
+.pulse {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: currentColor;
+}
+.pulse.anim {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.85)} }
+
+/* ---- Main content ---- */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.topbar {
+  height: 52px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 28px;
+  gap: 14px;
+  flex-shrink: 0;
+  background: var(--bg0);
+}
+.topbar-title { font-size: 15px; font-weight: 500; color: var(--text0); }
+.topbar-sub { font-size: 12px; color: var(--text2); font-family: var(--font-mono); }
+.topbar-spacer { flex: 1; }
+.topbar-badge {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 3px 9px;
+  border-radius: 4px;
+  border: 1px solid var(--border2);
+  color: var(--text2);
+}
+
+.content { flex: 1; overflow-y: auto; padding: 28px; }
+
+/* ---- Cards ---- */
+.card {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+.card-title {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text2);
+  margin-bottom: 14px;
+}
+
+/* ---- Form elements ---- */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.form-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-label {
+  font-size: 11px;
+  color: var(--text1);
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+.form-input, .form-select {
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--text0);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+  -webkit-appearance: none;
+}
+.form-input:focus, .form-select:focus { border-color: var(--green); }
+.form-input.amber:focus, .form-select.amber:focus { border-color: var(--amber); }
+.form-hint { font-size: 11px; color: var(--text2); margin-top: 2px; }
+
+.toggle-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0;
+}
+.toggle-label { font-size: 13px; color: var(--text1); }
+.toggle {
+  position: relative; width: 36px; height: 20px; cursor: pointer;
+}
+.toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.toggle-track {
+  position: absolute; inset: 0;
+  background: var(--bg3); border-radius: 10px;
+  border: 1px solid var(--border2);
+  transition: background 0.2s;
+}
+.toggle input:checked ~ .toggle-track { background: var(--green); border-color: var(--green); }
+.toggle-thumb {
+  position: absolute; top: 3px; left: 3px;
+  width: 14px; height: 14px;
+  background: var(--text0); border-radius: 50%;
+  transition: transform 0.2s;
+}
+.toggle input:checked ~ .toggle-track ~ .toggle-thumb { transform: translateX(16px); }
+
+/* ---- Buttons ---- */
+.btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 18px; border-radius: var(--radius);
+  font-family: var(--font-sans); font-size: 13px; font-weight: 500;
+  cursor: pointer; border: none; outline: none;
+  transition: all 0.14s; user-select: none;
+}
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn-primary {
+  background: var(--green); color: var(--bg0);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-amber {
+  background: var(--amber); color: var(--bg0);
+}
+.btn-amber:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-danger {
+  background: var(--red-dim); color: var(--red);
+  border: 1px solid rgba(224,85,85,0.25);
+}
+.btn-danger:hover:not(:disabled) { background: rgba(224,85,85,0.2); }
+.btn-ghost {
+  background: transparent; color: var(--text1);
+  border: 1px solid var(--border2);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--bg3); color: var(--text0); }
+.btn-row { display: flex; gap: 10px; margin-top: 20px; align-items: center; }
+
+/* ---- Stats ---- */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.stat-card {
+  background: var(--bg2); border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.stat-label { font-size: 10px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text2); margin-bottom: 6px; }
+.stat-value { font-family: var(--font-mono); font-size: 22px; font-weight: 500; color: var(--text0); }
+.stat-value.green { color: var(--green); }
+.stat-value.amber { color: var(--amber); }
+.stat-sub { font-size: 11px; color: var(--text2); margin-top: 3px; font-family: var(--font-mono); }
+
+/* ---- Dataset ---- */
+.ds-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.ds-row:last-child { border-bottom: none; }
+.ds-name { font-size: 13px; color: var(--text0); font-family: var(--font-mono); }
+.ds-counts { display: flex; gap: 16px; }
+.ds-count {
+  font-size: 12px; font-family: var(--font-mono);
+  color: var(--text2);
+}
+.ds-count span { color: var(--text0); font-weight: 500; }
+.ds-exists-badge {
+  font-size: 10px; padding: 2px 7px; border-radius: 4px;
+  font-family: var(--font-mono); letter-spacing: 0.05em;
+}
+.ds-exists-badge.yes { background: var(--green-dim); color: var(--green); }
+.ds-exists-badge.no { background: var(--bg3); color: var(--text2); }
+
+/* ---- Drop zone ---- */
+.dropzone {
+  border: 1.5px dashed var(--border2);
+  border-radius: var(--radius-lg);
+  padding: 36px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  position: relative;
+}
+.dropzone:hover, .dropzone.drag-over {
+  border-color: var(--green);
+  background: var(--green-dim2);
+}
+.dropzone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.drop-icon { font-size: 28px; margin-bottom: 10px; color: var(--text2); }
+.drop-title { font-size: 13px; color: var(--text1); margin-bottom: 4px; }
+.drop-sub { font-size: 11px; color: var(--text2); }
+
+.upload-selects {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;
+}
+
+/* ---- Chart area ---- */
+.chart-wrap {
+  position: relative;
+  background: var(--bg2);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.chart-wrap canvas { max-height: 280px; }
+.chart-title {
+  font-size: 11px; font-weight: 500; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text2); margin-bottom: 12px;
+}
+.chart-empty {
+  height: 200px; display: flex; align-items: center; justify-content: center;
+  color: var(--text2); font-size: 13px; font-family: var(--font-mono);
+}
+
+.metric-badges { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.metric-badge {
+  padding: 5px 12px; border-radius: 6px;
+  font-family: var(--font-mono); font-size: 12px;
+}
+.metric-badge.tl { background: rgba(79,163,232,0.12); color: var(--blue); }
+.metric-badge.vl { background: rgba(224,85,85,0.1); color: #e07070; }
+.metric-badge.td { background: var(--green-dim); color: var(--green); }
+.metric-badge.vd { background: rgba(245,166,35,0.12); color: var(--amber); }
+
+/* ---- Log ---- */
+.log-box {
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  height: 220px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text1);
+  scroll-behavior: smooth;
+}
+.log-line { white-space: pre-wrap; word-break: break-all; }
+.log-line.best { color: var(--green); }
+.log-line.fold { color: var(--amber); font-weight: 500; }
+.log-line.warn { color: #e0a030; }
+.log-line.err { color: var(--red); }
+.log-line.done { color: var(--green); font-weight: 500; }
+
+/* ---- Toast ---- */
+.toast-container {
+  position: fixed; bottom: 20px; right: 24px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 999;
+}
+.toast {
+  padding: 10px 16px; border-radius: var(--radius);
+  font-size: 13px; min-width: 220px;
+  animation: toastIn 0.2s ease;
+  border: 1px solid transparent;
+}
+.toast.success { background: var(--green-dim); color: var(--green); border-color: rgba(0,212,170,0.2); }
+.toast.error { background: var(--red-dim); color: var(--red); border-color: rgba(224,85,85,0.2); }
+.toast.info { background: var(--bg3); color: var(--text1); border-color: var(--border2); }
+@keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+/* ---- Divider ---- */
+.section-divider { height: 1px; background: var(--border); margin: 18px 0; }
+
+/* ---- Progress indicator ---- */
+.fold-indicator {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-radius: var(--radius);
+  background: var(--amber-dim); color: var(--amber);
+  font-family: var(--font-mono); font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.epoch-progress {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 12px; border-radius: var(--radius);
+  background: var(--green-dim2); margin-bottom: 12px;
+}
+.epoch-bar-wrap { flex: 1; height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
+.epoch-bar { height: 100%; background: var(--green); border-radius: 2px; transition: width 0.4s ease; }
+.epoch-label { font-family: var(--font-mono); font-size: 11px; color: var(--text1); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-main">SOIL-SEGMENT</div>
+      <div class="logo-sub">NPK Training Interface</div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Data</div>
+      <div class="nav-item" :class="{ active: tab === 'dataset' }" @click="tab='dataset'">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <ellipse cx="8" cy="4" rx="6" ry="2"/><path d="M2 4v4c0 1.1 2.7 2 6 2s6-.9 6-2V4"/><path d="M2 8v4c0 1.1 2.7 2 6 2s6-.9 6-2V8"/>
+        </svg>
+        Dataset
+      </div>
+      <div class="nav-item" :class="{ active: tab === 'upload' }" @click="tab='upload'">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M8 10V3M5 6l3-3 3 3"/><path d="M3 12h10"/>
+        </svg>
+        Upload files
+      </div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Training</div>
+      <div class="nav-item" :class="{ active: tab === 'unet' }" @click="tab='unet'">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="1" y="6" width="4" height="4" rx="1"/><rect x="11" y="6" width="4" height="4" rx="1"/><rect x="6" y="1" width="4" height="4" rx="1"/><rect x="6" y="11" width="4" height="4" rx="1"/>
+          <path d="M5 8h6M8 5v6"/>
+        </svg>
+        UNet model
+      </div>
+      <div class="nav-item" :class="{ 'active-amber': tab === 'regression', active: false }" @click="tab='regression'">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M2 12 L5 8 L8 9 L11 5 L14 3"/><circle cx="5" cy="8" r="1.5" fill="currentColor" stroke="none"/><circle cx="8" cy="9" r="1.5" fill="currentColor" stroke="none"/>
+        </svg>
+        Regression (NPK)
+      </div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Monitor</div>
+      <div class="nav-item" :class="{ active: tab === 'progress' }" @click="tab='progress'">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M2 12 L5 7 L9 9 L13 3"/><path d="M2 14h12"/>
+        </svg>
+        Training progress
+        <span v-if="status.running" style="margin-left:auto;width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 1.2s infinite;"></span>
+      </div>
+    </div>
+
+    <div class="sidebar-bottom">
+      <div class="status-pill"
+        :class="{ running: status.running && status.mode !== 'regression', 'running-reg': status.running && status.mode === 'regression', error: !!status.error, idle: !status.running && !status.error }">
+        <span class="pulse" :class="{ anim: status.running }"></span>
+        <span v-if="status.running && status.mode === 'unet'">training unet</span>
+        <span v-else-if="status.running && status.mode === 'unet_uncoated'">unet (LOO-CV)</span>
+        <span v-else-if="status.running && status.mode === 'regression'">regression</span>
+        <span v-else-if="status.error">error</span>
+        <span v-else>idle</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">{{ tabTitle }}</span>
+      <span class="topbar-sub">{{ tabSub }}</span>
+      <span class="topbar-spacer"></span>
+      <span class="topbar-badge">{{ serverUrl }}</span>
+    </div>
+
+    <div class="content">
+
+      <!-- ==================== DATASET TAB ==================== -->
+      <template v-if="tab === 'dataset'">
+        <div class="card">
+          <div class="card-title">Dataset overview</div>
+          <template v-if="dsInfo">
+            <div v-for="(ds, key) in dsInfoDisplay" :key="key" class="ds-row">
+              <div>
+                <div class="ds-name">{{ ds.label }}</div>
+                <div style="font-size:11px;color:var(--text2);margin-top:2px;font-family:var(--font-mono);">{{ ds.base }}</div>
+              </div>
+              <div class="ds-counts">
+                <span class="ds-count">images: <span>{{ ds.images }}</span></span>
+                <span class="ds-count">masks: <span>{{ ds.masks }}</span></span>
+                <span class="ds-exists-badge" :class="ds.exists ? 'yes' : 'no'">{{ ds.exists ? 'found' : 'missing' }}</span>
+              </div>
+            </div>
+          </template>
+          <div v-else style="color:var(--text2);font-size:13px;padding:10px 0;">Loading dataset info…</div>
+        </div>
+
+        <div class="card" v-if="dsInfo">
+          <div class="card-title">Checkpoints</div>
+          <div v-if="dsInfo.checkpoints.files.length === 0" style="color:var(--text2);font-size:13px;">No checkpoint files found.</div>
+          <div v-else style="display:flex;flex-wrap:wrap;gap:8px;">
+            <span v-for="f in dsInfo.checkpoints.files" :key="f"
+              style="font-family:var(--font-mono);font-size:11px;padding:3px 9px;border-radius:4px;background:var(--bg3);color:var(--text1);">
+              {{ f }}
+            </span>
+          </div>
+        </div>
+
+        <div class="btn-row" style="margin-top:4px;">
+          <button class="btn btn-ghost" @click="loadDatasetInfo">↻ Refresh</button>
+        </div>
+      </template>
+
+      <!-- ==================== UPLOAD TAB ==================== -->
+      <template v-if="tab === 'upload'">
+        <div class="card">
+          <div class="card-title">Upload options</div>
+          <div class="upload-selects">
+            <div class="form-group">
+              <label class="form-label">Target dataset</label>
+              <select v-model="uploadForm.dataset_type" class="form-select">
+                <option value="unet">UNet (coated)</option>
+                <option value="unet_uncoated">UNet (uncoated)</option>
+                <option value="regression">Regression (coated)</option>
+                <option value="regression_uncoated">Regression (uncoated)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">File type</label>
+              <select v-model="uploadForm.file_role" class="form-select">
+                <option value="images">Images (.jpg)</option>
+                <option value="masks">Masks (.png)</option>
+              </select>
+              <span class="form-hint">Or upload a .zip with images/ and masks/ folders</span>
+            </div>
+          </div>
+
+          <div class="dropzone"
+            :class="{ 'drag-over': dragging }"
+            @dragover.prevent="dragging=true"
+            @dragleave.prevent="dragging=false"
+            @drop.prevent="onDrop($event)">
+            <input type="file" multiple :accept="uploadAccept" @change="onFileSelect($event)" />
+            <div class="drop-icon">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+            <div class="drop-title">Drop files here or click to browse</div>
+            <div class="drop-sub">Supports .jpg, .png, or a .zip archive with images/ and masks/ folders</div>
+          </div>
+
+          <div v-if="uploadFiles.length > 0" style="margin-top:14px;">
+            <div style="font-size:11px;color:var(--text2);margin-bottom:8px;">{{ uploadFiles.length }} file(s) selected</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">
+              <span v-for="f in uploadFiles.slice(0,8)" :key="f.name"
+                style="font-family:var(--font-mono);font-size:11px;padding:3px 9px;background:var(--bg3);border-radius:4px;color:var(--text1);">
+                {{ f.name }}
+              </span>
+              <span v-if="uploadFiles.length > 8"
+                style="font-size:11px;padding:3px 9px;background:var(--bg3);border-radius:4px;color:var(--text2);">
+                +{{ uploadFiles.length - 8 }} more
+              </span>
+            </div>
+            <div class="btn-row" style="margin-top:0;">
+              <button class="btn btn-primary" :disabled="uploading" @click="doUpload">
+                {{ uploading ? 'Uploading…' : 'Upload ' + uploadFiles.length + ' file(s)' }}
+              </button>
+              <button class="btn btn-ghost" @click="uploadFiles=[]">Clear</button>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ==================== UNET TAB ==================== -->
+      <template v-if="tab === 'unet'">
+        <div class="card">
+          <div class="card-title">Mode</div>
+          <div class="toggle-row">
+            <label class="toggle">
+              <input type="checkbox" v-model="unet.uncoated" />
+              <span class="toggle-track"></span>
+              <span class="toggle-thumb"></span>
+            </label>
+            <span class="toggle-label">Uncoated mode (leave-one-out CV)</span>
+          </div>
+          <div v-if="unet.uncoated" style="font-size:12px;color:var(--text2);margin-top:6px;line-height:1.6;">
+            Trains {{ unet.uncoated_epochs }} epochs per fold with LOO-CV. Uses patch-based sampling. Optionally warm-starts from coated best_model.pth.
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">{{ unet.uncoated ? 'Uncoated hyperparameters' : 'Default mode hyperparameters' }}</div>
+          <template v-if="!unet.uncoated">
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">Image size (px)</label>
+                <input v-model.number="unet.img_size" type="number" class="form-input" step="32" min="128" max="1024" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Batch size</label>
+                <input v-model.number="unet.batch_size" type="number" class="form-input" min="1" max="32" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Max epochs</label>
+                <input v-model.number="unet.epochs" type="number" class="form-input" min="1" max="2000" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Early stopping patience</label>
+                <input v-model.number="unet.patience" type="number" class="form-input" min="1" max="500" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Learning rate</label>
+                <input v-model="unet.learning_rate" type="text" class="form-input" placeholder="1e-3" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Weight decay</label>
+                <input v-model="unet.weight_decay" type="text" class="form-input" placeholder="1e-4" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Random seed</label>
+                <input v-model.number="unet.seed" type="number" class="form-input" />
+              </div>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">Patch size (px)</label>
+                <input v-model.number="unet.patch_size" type="number" class="form-input" step="32" min="128" max="1024" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Patches per image</label>
+                <input v-model.number="unet.patches_per_image" type="number" class="form-input" min="8" max="256" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Batch size</label>
+                <input v-model.number="unet.uncoated_batch_size" type="number" class="form-input" min="1" max="32" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Epochs per fold</label>
+                <input v-model.number="unet.uncoated_epochs" type="number" class="form-input" min="1" max="1000" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Patience per fold</label>
+                <input v-model.number="unet.uncoated_patience" type="number" class="form-input" min="1" max="300" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Learning rate</label>
+                <input v-model="unet.uncoated_learning_rate" type="text" class="form-input" placeholder="1e-4" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Weight decay</label>
+                <input v-model="unet.uncoated_weight_decay" type="text" class="form-input" placeholder="1e-4" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Init checkpoint (optional)</label>
+                <input v-model="unet.uncoated_init_checkpoint" type="text" class="form-input" placeholder="auto (uses best_model.pth)" />
+                <span class="form-hint">Leave blank to auto-use coated best_model.pth</span>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Random seed</label>
+                <input v-model.number="unet.seed" type="number" class="form-input" />
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" :disabled="status.running" @click="startUnet">
+            ▶ Start training
+          </button>
+          <button class="btn btn-danger" :disabled="!status.running" @click="stopTraining">
+            ■ Stop
+          </button>
+          <span v-if="status.running" style="font-size:12px;color:var(--text1);font-family:var(--font-mono);">
+            training in progress…
+          </span>
+        </div>
+      </template>
+
+      <!-- ==================== REGRESSION TAB ==================== -->
+      <template v-if="tab === 'regression'">
+        <div class="card">
+          <div class="card-title">Mode</div>
+          <div class="toggle-row">
+            <label class="toggle">
+              <input type="checkbox" v-model="reg.uncoated" />
+              <span class="toggle-track"></span>
+              <span class="toggle-thumb"></span>
+            </label>
+            <span class="toggle-label">Uncoated dataset / checkpoint</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Regressor settings</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Polynomial degree</label>
+              <select v-model.number="reg.degree" class="form-select amber">
+                <option :value="1">1 — Linear</option>
+                <option :value="2">2 — Quadratic</option>
+                <option :value="3">3 — Cubic</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Ridge alpha (λ)</label>
+              <input v-model="reg.alpha" type="text" class="form-input amber" placeholder="1.0" />
+              <span class="form-hint">Regularisation strength (ignored if no-ridge)</span>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Validation split</label>
+              <input v-model.number="reg.test_size" type="number" class="form-input amber" step="0.05" min="0.05" max="0.5" />
+              <span class="form-hint">Fraction of data held out for validation</span>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Image size (px)</label>
+              <input v-model.number="reg.img_size" type="number" class="form-input amber" step="32" min="128" max="1024" />
+              <span class="form-hint">Should match UNet training img_size</span>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Max images (optional)</label>
+              <input v-model="reg.max_images_str" type="text" class="form-input amber" placeholder="all" />
+              <span class="form-hint">Leave blank to use all images</span>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Random seed</label>
+              <input v-model.number="reg.seed" type="number" class="form-input amber" />
+            </div>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <div style="display:flex;gap:24px;flex-wrap:wrap;">
+            <div class="toggle-row">
+              <label class="toggle">
+                <input type="checkbox" v-model="reg.no_ridge" />
+                <span class="toggle-track"></span>
+                <span class="toggle-thumb"></span>
+              </label>
+              <span class="toggle-label">No Ridge (plain LinearRegression)</span>
+            </div>
+            <div class="toggle-row">
+              <label class="toggle">
+                <input type="checkbox" v-model="reg.no_scaling" />
+                <span class="toggle-track"></span>
+                <span class="toggle-thumb"></span>
+              </label>
+              <span class="toggle-label">No feature scaling</span>
+            </div>
+            <div class="toggle-row">
+              <label class="toggle">
+                <input type="checkbox" v-model="reg.cpu" />
+                <span class="toggle-track"></span>
+                <span class="toggle-thumb"></span>
+              </label>
+              <span class="toggle-label">Force CPU inference</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-amber" :disabled="status.running" @click="startRegression">
+            ▶ Train regression
+          </button>
+          <button class="btn btn-danger" :disabled="!status.running" @click="stopTraining">
+            ■ Stop
+          </button>
+          <span v-if="status.running && status.mode === 'regression'" style="font-size:12px;color:var(--amber);font-family:var(--font-mono);">
+            regression training…
+          </span>
+        </div>
+      </template>
+
+      <!-- ==================== PROGRESS TAB ==================== -->
+      <template v-if="tab === 'progress'">
+
+        <div v-if="status.running || latestMetric" class="epoch-progress" v-show="status.mode !== 'regression'">
+          <div class="epoch-bar-wrap">
+            <div class="epoch-bar" :style="{ width: epochPct + '%' }"></div>
+          </div>
+          <span class="epoch-label">
+            Epoch {{ latestMetric ? latestMetric.epoch : 0 }} / {{ latestMetric ? latestMetric.max_epoch : (unet.uncoated ? unet.uncoated_epochs : unet.epochs) }}
+            <template v-if="status.fold"> · fold {{ status.fold }}/{{ status.total_folds }}</template>
+          </span>
+        </div>
+
+        <div v-if="status.fold" class="fold-indicator">
+          <span>LOO-CV</span>
+          <span>Fold {{ status.fold }} / {{ status.total_folds }}</span>
+        </div>
+
+        <div v-if="latestMetric" class="metric-badges">
+          <span class="metric-badge tl">Train loss {{ latestMetric.train_loss.toFixed(4) }}</span>
+          <span class="metric-badge vl">Val loss {{ latestMetric.val_loss.toFixed(4) }}</span>
+          <span class="metric-badge td">Train Dice {{ latestMetric.train_dice.toFixed(4) }}</span>
+          <span class="metric-badge vd">Val Dice {{ latestMetric.val_dice.toFixed(4) }}</span>
+        </div>
+
+        <div class="chart-wrap">
+          <div class="chart-title">Loss over epochs</div>
+          <div v-if="status.metrics.length === 0" class="chart-empty">no data yet — start training to see metrics</div>
+          <canvas v-else id="chart-loss"></canvas>
+        </div>
+
+        <div class="chart-wrap">
+          <div class="chart-title">Dice score over epochs</div>
+          <div v-if="status.metrics.length === 0" class="chart-empty">—</div>
+          <canvas v-else id="chart-dice"></canvas>
+        </div>
+
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <div class="card-title" style="margin-bottom:0;">Training log</div>
+            <button class="btn btn-ghost" style="padding:4px 10px;font-size:11px;" @click="clearMetrics">Clear</button>
+          </div>
+          <div class="log-box" ref="logBox">
+            <div v-if="status.log.length === 0" style="color:var(--text2);">Waiting for output…</div>
+            <div v-for="(line, i) in status.log" :key="i" class="log-line" :class="logClass(line)">{{ line }}</div>
+          </div>
+        </div>
+
+        <div v-if="status.completed && !status.running" style="padding:12px 16px;border-radius:var(--radius);background:var(--green-dim);color:var(--green);font-family:var(--font-mono);font-size:13px;margin-top:4px;">
+          ✓ Training completed successfully
+        </div>
+        <div v-if="status.error" style="padding:12px 16px;border-radius:var(--radius);background:var(--red-dim);color:var(--red);font-family:var(--font-mono);font-size:13px;margin-top:4px;">
+          ✗ {{ status.error }}
+        </div>
+      </template>
+
+    </div><!-- /content -->
+  </main>
+
+  <!-- Toasts -->
+  <div class="toast-container">
+    <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">{{ t.msg }}</div>
+  </div>
+
+</div>
+
+<script>
+const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
+
+const API = 'http://localhost:8000';
+
+createApp({
+  setup() {
+    const tab = ref('dataset');
+    const dragging = ref(false);
+    const uploading = ref(false);
+    const uploadFiles = ref([]);
+    const dsInfo = ref(null);
+    const toasts = ref([]);
+    const logBox = ref(null);
+
+    const lossChart = ref(null);
+    const diceChart = ref(null);
+
+    const status = ref({
+      running: false, mode: null, fold: null, total_folds: null,
+      metrics: [], log: [], completed: false, error: null
+    });
+
+    const unet = ref({
+      uncoated: false, seed: 42,
+      img_size: 512, batch_size: 4, epochs: 300, patience: 50,
+      learning_rate: '1e-3', weight_decay: '1e-4',
+      patch_size: 512, patches_per_image: 64,
+      uncoated_batch_size: 4, uncoated_epochs: 160, uncoated_patience: 30,
+      uncoated_learning_rate: '1e-4', uncoated_weight_decay: '1e-4',
+      uncoated_init_checkpoint: ''
+    });
+
+    const reg = ref({
+      uncoated: false, img_size: 512,
+      degree: 1, alpha: '1.0', no_ridge: false, no_scaling: false,
+      test_size: 0.2, seed: 42, max_images_str: '', cpu: false
+    });
+
+    const uploadForm = ref({ dataset_type: 'unet', file_role: 'images' });
+    const serverUrl = ref(API);
+
+    let pollTimer = null;
+    let prevMetricLen = 0;
+
+    // ---- computed ----
+    const tabTitle = computed(() => ({
+      dataset: 'Dataset overview', upload: 'Upload files',
+      unet: 'UNet training', regression: 'Regression — NPK prediction', progress: 'Training progress'
+    }[tab.value] || ''));
+
+    const tabSub = computed(() => ({
+      dataset: 'view dataset directories and checkpoint files',
+      upload: 'add images and masks to your dataset',
+      unet: 'configure and launch segmentation training',
+      regression: 'train the NPK regression model from UNet outputs',
+      progress: 'live metrics and log output'
+    }[tab.value] || ''));
+
+    const uploadAccept = computed(() =>
+      uploadForm.value.file_role === 'images' ? '.jpg,.jpeg' :
+      uploadForm.value.file_role === 'masks' ? '.png' : '.zip,.jpg,.jpeg,.png'
+    );
+
+    const dsInfoDisplay = computed(() => {
+      if (!dsInfo.value) return {};
+      const d = dsInfo.value;
+      return {
+        unet: { ...d.unet, label: 'UNET_dataset (coated)' },
+        unet_uncoated: { ...d.unet_uncoated, label: 'UNET_dataset_uncoated' },
+        regression: { ...d.regression, label: 'regression_dataset (coated)' },
+        regression_uncoated: { ...d.regression_uncoated, label: 'regression_dataset_uncoated' },
+      };
+    });
+
+    const latestMetric = computed(() => {
+      const m = status.value.metrics;
+      return m.length > 0 ? m[m.length - 1] : null;
+    });
+
+    const epochPct = computed(() => {
+      if (!latestMetric.value) return 0;
+      const max = latestMetric.value.max_epoch || (unet.value.uncoated ? unet.value.uncoated_epochs : unet.value.epochs);
+      return Math.min(100, (latestMetric.value.epoch / max) * 100);
+    });
+
+    // ---- api helpers ----
+    async function api(method, path, body) {
+      const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) opts.body = JSON.stringify(body);
+      const r = await fetch(API + path, opts);
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ detail: r.statusText }));
+        throw new Error(err.detail || r.statusText);
+      }
+      return r.json();
+    }
+
+    function toast(msg, type = 'info', ms = 3500) {
+      const id = Date.now();
+      toasts.value.push({ id, msg, type });
+      setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, ms);
+    }
+
+    // ---- dataset ----
+    async function loadDatasetInfo() {
+      try { dsInfo.value = await api('GET', '/api/dataset/info'); }
+      catch (e) { toast('Could not load dataset info: ' + e.message, 'error'); }
+    }
+
+    // ---- upload ----
+    function onFileSelect(e) { uploadFiles.value = Array.from(e.target.files); }
+    function onDrop(e) {
+      dragging.value = false;
+      uploadFiles.value = Array.from(e.dataTransfer.files);
+    }
+
+    async function doUpload() {
+      if (!uploadFiles.value.length) return;
+      uploading.value = true;
+      try {
+        const fd = new FormData();
+        uploadFiles.value.forEach(f => fd.append('files', f));
+        fd.append('dataset_type', uploadForm.value.dataset_type);
+        fd.append('file_role', uploadForm.value.file_role);
+        const r = await fetch(API + '/api/dataset/upload', { method: 'POST', body: fd });
+        if (!r.ok) throw new Error((await r.json()).detail);
+        const res = await r.json();
+        toast(`Uploaded ${res.saved.length} file(s)`, 'success');
+        uploadFiles.value = [];
+        await loadDatasetInfo();
+      } catch (e) {
+        toast('Upload failed: ' + e.message, 'error');
+      } finally {
+        uploading.value = false;
+      }
+    }
+
+    // ---- training ----
+    function parseFloat_(v) { const n = parseFloat(v); return isNaN(n) ? v : n; }
+
+    async function startUnet() {
+      try {
+        const p = {
+          ...unet.value,
+          learning_rate: parseFloat_(unet.value.learning_rate),
+          weight_decay: parseFloat_(unet.value.weight_decay),
+          uncoated_learning_rate: parseFloat_(unet.value.uncoated_learning_rate),
+          uncoated_weight_decay: parseFloat_(unet.value.uncoated_weight_decay),
+          uncoated_init_checkpoint: unet.value.uncoated_init_checkpoint || null,
+        };
+        await api('POST', '/api/train/unet/start', p);
+        toast('UNet training started', 'success');
+        tab.value = 'progress';
+        startPolling();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function startRegression() {
+      try {
+        const p = {
+          ...reg.value,
+          alpha: parseFloat_(reg.value.alpha),
+          max_images: reg.value.max_images_str ? parseInt(reg.value.max_images_str) : null,
+        };
+        delete p.max_images_str;
+        await api('POST', '/api/train/regression/start', p);
+        toast('Regression training started', 'success');
+        tab.value = 'progress';
+        startPolling();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function stopTraining() {
+      try {
+        await api('POST', '/api/train/stop');
+        toast('Training stopped', 'info');
+        stopPolling();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function clearMetrics() {
+      await api('DELETE', '/api/train/clear').catch(() => {});
+      status.value.metrics = [];
+      status.value.log = [];
+      status.value.error = null;
+      status.value.completed = false;
+      destroyCharts();
+    }
+
+    // ---- polling ----
+    async function pollStatus() {
+      try {
+        const s = await api('GET', '/api/train/status');
+        status.value = s;
+        if (!s.running) stopPolling();
+
+        if (s.metrics.length !== prevMetricLen) {
+          prevMetricLen = s.metrics.length;
+          await nextTick();
+          updateCharts(s.metrics);
+        }
+
+        await nextTick();
+        if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight;
+      } catch (_) {}
+    }
+
+    function startPolling() {
+      if (pollTimer) return;
+      pollTimer = setInterval(pollStatus, 1800);
+    }
+
+    function stopPolling() {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    // ---- charts ----
+    function destroyCharts() {
+      if (lossChart.value) { lossChart.value.destroy(); lossChart.value = null; }
+      if (diceChart.value) { diceChart.value.destroy(); diceChart.value = null; }
+    }
+
+    const chartDefaults = {
+      responsive: true, maintainAspectRatio: true, animation: false,
+      plugins: { legend: { labels: { color: '#9aa3b2', font: { family: 'IBM Plex Mono', size: 11 }, boxWidth: 14 } } },
+      scales: {
+        x: { ticks: { color: '#5c6478', font: { family: 'IBM Plex Mono', size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { ticks: { color: '#5c6478', font: { family: 'IBM Plex Mono', size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } }
+      }
+    };
+
+    function updateCharts(metrics) {
+      if (metrics.length === 0) return;
+      const labels = metrics.map(m => m.fold ? `F${m.fold}:${m.epoch}` : `${m.epoch}`);
+      const tl = metrics.map(m => m.train_loss);
+      const vl = metrics.map(m => m.val_loss);
+      const td = metrics.map(m => m.train_dice);
+      const vd = metrics.map(m => m.val_dice);
+
+      const lEl = document.getElementById('chart-loss');
+      const dEl = document.getElementById('chart-dice');
+      if (!lEl || !dEl) return;
+
+      const lData = {
+        labels,
+        datasets: [
+          { label: 'train loss', data: tl, borderColor: '#4fa3e8', backgroundColor: 'rgba(79,163,232,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+          { label: 'val loss', data: vl, borderColor: '#e07070', backgroundColor: 'rgba(224,112,112,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+        ]
+      };
+      const dData = {
+        labels,
+        datasets: [
+          { label: 'train dice', data: td, borderColor: '#00d4aa', backgroundColor: 'rgba(0,212,170,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+          { label: 'val dice', data: vd, borderColor: '#f5a623', backgroundColor: 'rgba(245,166,35,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+        ]
+      };
+
+      if (!lossChart.value) {
+        lossChart.value = new Chart(lEl, { type: 'line', data: lData, options: { ...chartDefaults } });
+      } else {
+        lossChart.value.data = lData;
+        lossChart.value.update('none');
+      }
+      if (!diceChart.value) {
+        diceChart.value = new Chart(dEl, { type: 'line', data: dData, options: { ...chartDefaults } });
+      } else {
+        diceChart.value.data = dData;
+        diceChart.value.update('none');
+      }
+    }
+
+    // ---- log coloring ----
+    function logClass(line) {
+      if (line.includes('[BEST]') || line.includes('Training Complete') || line.includes('✓')) return 'done';
+      if (line.includes('[WARN]') || line.includes('WARN')) return 'warn';
+      if (line.includes('Error') || line.includes('error') || line.includes('Traceback')) return 'err';
+      if (line.match(/^Fold\s+\d+/)) return 'fold';
+      return '';
+    }
+
+    // ---- lifecycle ----
+    onMounted(async () => {
+      await loadDatasetInfo();
+      await pollStatus();
+      if (status.value.running) startPolling();
+    });
+
+    // re-draw when switching to progress tab
+    watch(tab, async (t) => {
+      if (t === 'progress' && status.value.metrics.length > 0) {
+        await nextTick();
+        updateCharts(status.value.metrics);
+      }
+    });
+
+    return {
+      tab, tabTitle, tabSub, dragging, uploading,
+      uploadFiles, uploadForm, dsInfo, dsInfoDisplay, toasts, logBox, serverUrl,
+      status, unet, reg,
+      latestMetric, epochPct,
+      loadDatasetInfo, onFileSelect, onDrop, doUpload,
+      startUnet, startRegression, stopTraining, clearMetrics,
+      uploadAccept, logClass
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

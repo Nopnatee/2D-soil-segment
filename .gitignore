@@ -5,7 +5,6 @@ Learn 2D-Segmentation.ipynb
 *.pth
 *.jpg
 *.png
-*.html
 *.jpeg
 *.json
 .gradio/

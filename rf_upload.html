@@ -1,0 +1,866 @@
+﻿Title: Upload an Image | Roboflow Docs
+
+URL Source: http://docs.roboflow.com/developer/manage-images/upload-an-image
+
+Markdown Content:
+1.   [Manage Images](https://docs.roboflow.com/developer/manage-images)
+
+Upload an Image
+---------------
+
+You can upload images to Roboflow projects using the web interface, Python SDK, REST API, and CLI.
+
+```
+from roboflow import Roboflow
+
+# Initialize the Roboflow object with your API key
+rf = Roboflow(api_key="YOUR_PRIVATE_API_KEY")
+
+# Retrieve your current workspace and project name
+print(rf.workspace())
+
+# Specify the project for upload
+# let's you have a project at https://app.roboflow.com/my-workspace/my-project
+workspaceId = 'my-workspace'
+projectId = 'my-project'
+project = rf.workspace(workspaceId).project(projectId)
+
+# Upload the image to your project
+project.upload("UPLOAD_IMAGE.jpg")
+
+"""
+Optional Parameters:
+- num_retry_uploads: Number of retries for uploading the image in case of failure.
+- batch_name: Upload the image to a specific batch.
+- split: Upload the image to a specific split.
+- tag: Store metadata as a tag on the image.
+- sequence_number: [Optional] If you want to keep the order of your images in the dataset, pass sequence_number and sequence_size..
+- sequence_size: [Optional] The total number of images in the sequence. Defaults to 100,000 if not set.
+"""
+
+project.upload(
+    image_path="UPLOAD_IMAGE.jpg",
+    batch_name="YOUR_BATCH_NAME",
+    split="train",
+    num_retry_uploads=3,
+    tag_names=["YOUR_TAG_NAME"],
+    sequence_number=99,
+    sequence_size=100
+)
+```
+
+To upload a new project, add the following code before your model upload:
+
+```
+from roboflow import Roboflow
+rf = Roboflow(api_key="YOUR_PRIVATE_API_KEY")
+
+new_project = rf.workspace().create_project(
+    project_name="PROJECT_NAME",
+    project_license="MIT",
+    project_type="PROJECT_TYPE", 
+    annotation="PROJECT_DESCRIPTION"
+)
+
+"""
+Parameters:
+- project_name: Preferred project name.
+- project_type: Must be one of object-detection, single-label-classification, multi-label-classification, instance-segmentation, or semantic-segmentation.
+- project_description: Preferred project description.
+"""
+```
+
+CLI upload is especially useful if you have a large number of images (i.e. 1,000+) that you want to upload to Roboflow.
+
+To upload a single file, use the following command:
+
+`roboflow upload image.jpg`
+
+This will ask you which of your projects to upload into, but you can also skip that by specifying it explicitly using the `-p` option to the command.
+
+If you have annotations for your image such as a file called `image.xml`:
+
+`roboflow upload image1.jpg -a image.xml`
+
+To upload all images in a folder, use the following command:
+
+`roboflow upload *.jpg`
+
+If you have many images with annotations, you can pass a special “[filename]” value to the `-a` option that will match the annotation file name based on the name of the image. This would upload image1.jpg with annotations from `image1.xml`, and `image2.jpg` with annotations from `image2.xml`, etc
+
+`roboflow upload *.jpg -a “[filename].xml”`
+
+This only works if you have one annotation file for each image. If you have an entire dataset in a common format, like one downloaded from Roboflow Universe, you can also use the `import` command.
+
+To upload a full dataset, refer to the Upload Dataset documentation.
+
+Querystring parameters accepted by the API:
+
+**api_key**: Obtain from https://app.roboflow.com/account/api **image**: [Optional] URL of the image to add. Use if your image is hosted elsewhere (Required when you don't POST a base64 encoded image in the request body). **name**: [Optional] The filename of the image (if not set, we will try to infer it). **batch**: [Optional] Group images under a batch with this name **tag**: [Optional] Can be specified multiple times. Add tags to uploaded image. **split**: [Optional] One of: train, valid, or test (defaults to train). **sequence_number**: [Optional] If you want to keep the order of your images in the dataset, you can uploaded images increasing sequence numbers. **sequence_size**: [Optional] The total number of images in the sequence. Defaults to 100,000 if not set. **inference_id**: [Optional] The inference ID passed returned from a roboflow inference detection. This inference_id allows the image to be correlated with a roboflow detection in Model Monitoring (enterprise feature).
+
+Uploading a local file called `YOUR_IMAGE.jpg` using multipart/form-data (recommended):
+
+```
+curl -F name=YOUR_IMAGE.jpg -F split=train \
+-F file=@YOUR_IMAGE.jpg \
+"https://api.roboflow.com/dataset/YOUR_DATASET_NAME/upload?\
+api_key=YOUR_API_KEY"
+```
+
+Alternatively, uploading a base64 encoded image:
+
+```
+base64 -i YOUR_IMAGE.jpg | curl -d @- \
+"https://api.roboflow.com/dataset/your-dataset/upload?\
+api_key=YOUR_API_KEY&\
+name=YOUR_IMAGE.jpg&\
+split=train&\
+batch=BATCH_NAME_FOR_UPLOAD"
+```
+
+Uploading an image hosted on the web via its URL (don't forget to [URL encode it](https://www.urlencoder.org/)):
+
+```
+curl -X POST "https://api.roboflow.com/dataset/your-dataset/upload?\
+api_key=YOUR_API_KEY&\
+image=https%3A%2F%2Fi.imgur.com%2FPEEvqPN.png&\
+name=201-956-1246.png&\
+split=train"
+```
+
+You will need to install [curl for Windows](https://curl.se/windows/) and [GNU's base64 tool for Windows](http://gnuwin32.sourceforge.net/packages/coreutils.htm). The easiest way to do this is to use the [git for Windows installer](https://git-scm.com/downloads) which also includes the `curl` and `base64` command line tools when you select "Use Git and optional Unix tools from the Command Prompt" during installation.
+
+Then you can use the same commands as above.
+
+We're using [axios](https://github.com/axios/axios) and [form-data](https://github.com/form-data/form-data) to perform the POST request in this example so first run `npm install axios form-data` to install the dependency.
+
+```
+const axios = require("axios");
+const fs = require("fs");
+const FormData = require('form-data');
+
+const formData = new FormData();
+formData.append("name", "YOUR_IMAGE.jpg");
+formData.append("file", fs.createReadStream("YOUR_IMAGE.jpg"));
+formData.append("split", "train");
+
+axios({
+    method: "POST",
+    url: "https://api.roboflow.com/dataset/YOUR_DATASET_NAME/upload",
+    params: {
+        api_key: "YOUR_API_KEY"
+    },
+    data: formData,
+    headers: formData.getHeaders()
+})
+.then(function(response) {
+    console.log(response.data);
+})
+.catch(function(error) {
+    console.log(error.message);
+});
+```
+
+```
+const axios = require("axios");
+const fs = require("fs");
+
+const image = fs.readFileSync("YOUR_IMAGE.jpg", {
+    encoding: "base64"
+});
+
+axios({
+    method: "POST",
+    url: "https://api.roboflow.com/dataset/YOUR_DATASET_NAME/upload",
+    params: {
+        api_key: "YOUR_API_KEY",
+        name: "YOUR_IMAGE.jpg",
+        split: "train",
+        batch: "YOUR_BATCH_NAME"
+    },
+    data: image,
+    headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+})
+.then(function(response) {
+    console.log(response.data);
+})
+.catch(function(error) {
+    console.log(error.message);
+});
+```
+
+**Adding an Image Hosted Elsewhere via URL**
+
+```
+const axios = require("axios");
+
+axios({
+    method: "POST",
+    url: "https://api.roboflow.com/dataset/YOUR_DATASET_NAME/upload",
+    params: {
+        api_key: "YOUR_API_KEY",
+        image: "https://i.imgur.com/PEEvqPN.png",
+        name: "201-956-1246.png",
+        split: "train"
+    }
+})
+.then(function(response) {
+    console.log(response.data);
+})
+.catch(function(error) {
+    console.log(error.message);
+});
+```
+
+We are currently beta testing `roboflow.js`, a browser-based JavaScript library which, among other things, includes safe client-side uploads without exposing your secret API Key to the web. If you'd like early access, please [contact us](https://roboflow.com/contact).
+
+An example upload snippet using Swift for developing on iOS.
+
+```
+//Upload an image to a provided project
+public func uploadImage(image: UIImage, project: String, completion: @escaping (UploadResult)->()) {
+    let encodedImage = convertImageToBase64String(img: image)
+    let uuid = UUID().uuidString
+    
+    var request = URLRequest(url: URL(string: "https://api.roboflow.com/dataset/\(project)/upload?api_key=\(apiKey!)&name=\(uuid)&split=train")!,timeoutInterval: Double.infinity)
+
+    request.addValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+    request.httpMethod = "POST"
+    request.httpBody = encodedImage.toData()
+    
+    URLSession.shared.dataTask(with: request) { data, response, error in
+        // Parse Response to String
+        guard let data = data else {
+            completion(UploadResult.Error)
+            return
+        }
+
+        do {
+            let dict = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
+            let duplicate = dict!["duplicate"] as? Bool
+            
+            if duplicate ==  true {
+                completion(UploadResult.Duplicate)
+            } else {
+                let success = dict!["success"] as! Bool
+                if success == true {
+                    completion(UploadResult.Success)
+                } else {
+                    completion(UploadResult.Error)
+                }
+            }
+
+        } catch {
+            print(error.localizedDescription)
+            completion(UploadResult.Error)
+        }
+    }.resume()
+}
+
+func convertImageToBase64String (img: UIImage) -> String {
+    return img.jpegData(compressionQuality: 1)?.base64EncodedString() ?? ""
+}
+```
+
+}
+
+```
+import java.io.*
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
+import java.util.*
+
+fun main() {
+    // Get Image Path
+    val filePath = System.getProperty("user.dir") + System.getProperty("file.separator") + "YOUR_IMAGE.jpg"
+    val file = File(filePath)
+
+    // Base 64 Encode
+    val encodedFile: String
+    val fileInputStreamReader = FileInputStream(file)
+    val bytes = ByteArray(file.length().toInt())
+    fileInputStreamReader.read(bytes)
+    encodedFile = String(Base64.getEncoder().encode(bytes), StandardCharsets.US_ASCII)
+    val API_KEY = "" // Your API Key
+    val DATASET_NAME = "your-dataset" // Set Dataset Name (Found in Dataset URL)
+
+    // Construct the URL
+    val uploadURL = "https://api.roboflow.com/dataset/" +
+            DATASET_NAME + "/upload" +
+            "?api_key=" + API_KEY +
+            "&name=YOUR_IMAGE.jpg" +
+            "&split=train"
+
+    // Http Request
+    var connection: HttpURLConnection? = null
+    try {
+        // Configure connection to URL
+        val url = URL(uploadURL)
+        connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type",
+                "application/x-www-form-urlencoded")
+        connection.setRequestProperty("Content-Length",
+                Integer.toString(encodedFile.toByteArray().size))
+        connection.setRequestProperty("Content-Language", "en-US")
+        connection.useCaches = false
+        connection.doOutput = true
+
+        //Send request
+        val wr = DataOutputStream(
+                connection.outputStream)
+        wr.writeBytes(encodedFile)
+        wr.close()
+
+        // Get Response
+        val stream = connection.inputStream
+        val reader = BufferedReader(InputStreamReader(stream))
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+        reader.close()
+    } catch (e: Exception) {
+        e.printStackTrace()
+    } finally {
+        connection?.disconnect()
+    }
+}
+main()
+```
+
+**Adding an Image Hosted Elsewhere via URL:**
+
+```
+import java.io.BufferedReader
+import java.io.DataOutputStream
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+
+fun main() {
+    val imageURL = "https://i.imgur.com/PEEvqPN.png" // Replace Image URL
+    val API_KEY = "" // Your API Key
+    val DATASET_NAME = "your-dataset" // Set Dataset Name (Found in Dataset URL)
+
+    // Upload URL
+    val uploadURL = ("https://api.roboflow.com/dataset/" + DATASET_NAME + "/upload" + "?api_key=" + API_KEY
+            + "&name=YOUR_IMAGE.jpg" + "&split=train" + "&image="
+            + URLEncoder.encode(imageURL, "utf-8"))
+
+    // Http Request
+    var connection: HttpURLConnection? = null
+    try {
+        // Configure connection to URL
+        val url = URL(uploadURL)
+        connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+        connection.setRequestProperty("Content-Length", Integer.toString(uploadURL.toByteArray().size))
+        connection.setRequestProperty("Content-Language", "en-US")
+        connection.useCaches = false
+        connection.doOutput = true
+
+        // Send request
+        val wr = DataOutputStream(connection.outputStream)
+        wr.writeBytes(uploadURL)
+        wr.close()
+
+        // Get Response
+        val stream = connection.inputStream
+        val reader = BufferedReader(InputStreamReader(stream))
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+        reader.close()
+    } catch (e: Exception) {
+        e.printStackTrace()
+    } finally {
+        connection?.disconnect()
+    }
+}
+
+main()
+```
+
+```
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+
+public class UploadLocal {
+    public static void main(String[] args) throws IOException {
+        // Get Image Path
+        String filePath = System.getProperty("user.dir") + System.getProperty("file.separator") + "YOUR_IMAGE.jpg";
+        File file = new File(filePath);
+
+        // Base 64 Encode
+        String encodedFile;
+        FileInputStream fileInputStreamReader = new FileInputStream(file);
+        byte[] bytes = new byte[(int) file.length()];
+        fileInputStreamReader.read(bytes);
+        encodedFile = new String(Base64.getEncoder().encode(bytes), StandardCharsets.US_ASCII);
+
+        String API_KEY = ""; // Your API Key
+        String DATASET_NAME = "your-dataset"; // Set Dataset Name (Found in Dataset URL)
+
+        // Construct the URL
+        String uploadURL =
+                "https://api.roboflow.com/dataset/"+
+                        DATASET_NAME + "/upload" +
+                        "?api_key=" + API_KEY +
+                        "&name=YOUR_IMAGE.jpg" +
+                        "&split=train";
+
+        // Http Request
+        HttpURLConnection connection = null;
+        try {
+            //Configure connection to URL
+            URL url = new URL(uploadURL);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Content-Type",
+                    "application/x-www-form-urlencoded");
+
+            connection.setRequestProperty("Content-Length",
+                    Integer.toString(encodedFile.getBytes().length));
+            connection.setRequestProperty("Content-Language", "en-US");
+            connection.setUseCaches(false);
+            connection.setDoOutput(true);
+
+            //Send request
+            DataOutputStream wr = new DataOutputStream(
+                    connection.getOutputStream());
+            wr.writeBytes(encodedFile);
+            wr.close();
+
+            // Get Response
+            InputStream stream = connection.getInputStream();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(stream));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(line);
+            }
+            reader.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+}
+```
+
+**Adding an Image Hosted Elsewhere via URL:**
+
+```
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+
+public class UploadHosted {
+    public static void main(String[] args) {
+        String imageURL = "https://i.imgur.com/PEEvqPN.png"; // Replace Image URL
+        String API_KEY = ""; // Your API Key
+        String DATASET_NAME = "your-dataset"; // Set Dataset Name (Found in Dataset URL)
+
+        // Upload URL
+        String uploadURL = "https://api.roboflow.com/dataset/" + DATASET_NAME + "/upload" + "?api_key=" + API_KEY
+                + "&name=YOUR_IMAGE.jpg" + "&split=train" + "&image="
+                + URLEncoder.encode(imageURL, StandardCharsets.UTF_8);
+
+        // Http Request
+        HttpURLConnection connection = null;
+        try {
+            // Configure connection to URL
+            URL url = new URL(uploadURL);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+
+            connection.setRequestProperty("Content-Length", Integer.toString(uploadURL.getBytes().length));
+            connection.setRequestProperty("Content-Language", "en-US");
+            connection.setUseCaches(false);
+            connection.setDoOutput(true);
+
+            // Send request
+            DataOutputStream wr = new DataOutputStream(connection.getOutputStream());
+            wr.writeBytes(uploadURL);
+            wr.close();
+
+            // Get Response
+            InputStream stream = connection.getInputStream();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(stream));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(line);
+            }
+            reader.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+}
+```
+
+```
+source "https://rubygems.org"
+
+gem "httparty", "~> 0.18.1"
+gem "base64", "~> 0.1.0"
+gem "cgi", "~> 0.2.1"
+```
+
+```
+GEM
+  remote: https://rubygems.org/
+  specs:
+    base64 (0.1.0)
+    cgi (0.2.1)
+    httparty (0.18.1)
+      mime-types (~> 3.0)
+      multi_xml (>= 0.5.2)
+    mime-types (3.3.1)
+      mime-types-data (~> 3.2015)
+    mime-types-data (3.2021.0225)
+    multi_xml (0.6.0)
+
+PLATFORMS
+  x64-mingw32
+  x86_64-linux
+
+DEPENDENCIES
+  base64 (~> 0.1.0)
+  cgi (~> 0.2.1)
+  httparty (~> 0.18.1)
+
+BUNDLED WITH
+   2.2.15
+```
+
+```
+require 'base64'
+require 'httparty'
+
+encoded = Base64.encode64(File.open("YOUR_IMAGE.jpg", "rb").read)
+dataset_name = "your-dataset" # Set Dataset Name (Found in Dataset URL)
+api_key = "" # Your API KEY Here
+
+params = "?api_key=" + api_key + 
+"&name=YOUR_IMAGE.jpg" + 
+"&split=train"
+
+response = HTTParty.post(
+    "https://api.roboflow.com/dataset/" + dataset_name + "/upload" + params,
+    body: encoded, 
+    headers: {
+    'Content-Type' => 'application/x-www-form-urlencoded',
+    'charset' => 'utf-8'
+  })
+
+  puts response
+```
+
+**Adding an Image Hosted Elsewhere via URL:**
+
+```
+require 'httparty'
+require 'cgi'
+
+dataset_name = "your-dataset" # Set Dataset Name (Found in Dataset URL)
+api_key = "" # Your API KEY Here
+img_url = "https://i.imgur.com/PEEvqPN.png" # Construct the URL
+
+img_url = CGI::escape(img_url)
+
+params = "?api_key=" + api_key + 
+"&name=YOUR_IMAGE.jpg" + 
+"&split=train" +
+"&image=" + img_url
+
+response = HTTParty.post(
+    "https://api.roboflow.com/dataset/" + dataset_name + "/upload" + params,
+    headers: {
+    'Content-Type' => 'application/x-www-form-urlencoded',
+    'charset' => 'utf-8'
+  })
+
+puts response
+```
+
+```
+<?php
+
+// Base 64 Encode Image
+$data = base64_encode(file_get_contents("YOUR_IMAGE.jpg"));
+
+$api_key = ""; // Set API Key
+$dataset_name = "your-dataset"; // Set Dataset Name (Found in Dataset URL)
+
+// URL for Http Request
+$url = "https://api.roboflow.com/dataset/" 
+. $dataset_name .  "/upload" 
+.  "?api_key="  .  $api_key  
+.  "&name=YOUR_IMAGE.jpg" 
+. "&split=train";
+
+// Setup + Send Http request
+$options = array(
+  'http' => array (
+    'header' => "Content-type: application/x-www-form-urlencoded\r\n",
+    'method'  => 'POST',
+    'content' => $data
+  ));
+
+$context  = stream_context_create($options);
+$result = file_get_contents($url, false, $context);
+echo $result;
+?>
+```
+
+**Adding an Image Hosted Elsewhere via URL:**
+
+```
+<?php
+
+$api_key = ""; // Set API Key
+$dataset_name = "your-dataset"; // Set Dataset Name (Found in Dataset URL)
+$img_url = "https://i.imgur.com/PEEvqPN.png";
+
+// URL for Http Request
+$url = "https://api.roboflow.com/dataset/" 
+. $dataset_name .  "/upload" 
+.  "?api_key="  .  $api_key  
+.  "&name=YOUR_IMAGE.jpg" 
+. "&split=train" 
+. "&image=" . urlencode($img_url);
+
+// Setup + Send Http request
+$options = array(
+  'http' => array (
+    'header' => "Content-type: application/x-www-form-urlencoded\r\n",
+    'method'  => 'POST'
+  ));
+
+$context  = stream_context_create($options);
+$result = file_get_contents($url, false, $context);
+echo $result;
+?>
+```
+
+```
+package main
+
+import (
+    "bufio"
+    "encoding/base64"
+    "fmt"
+    "io/ioutil"
+    "os"
+	"net/http"
+	"strings"
+)
+
+func main() {
+	api_key := ""  // Your API Key
+	dataset_name := "Your-Dataset" // Set Dataset Name (Found in Dataset URL)
+
+    // Open file on disk.
+    f, _ := os.Open("YOUR_IMAGE.jpg")
+
+    // Read entire JPG into byte slice.
+    reader := bufio.NewReader(f)
+    content, _ := ioutil.ReadAll(reader)
+
+    // Encode as base64.
+    data := base64.StdEncoding.EncodeToString(content)
+	uploadURL := "https://api.roboflow.com/dataset/"+ dataset_name + "/upload"+
+    "?api_key=" + api_key +
+    "&name=YOUR_IMAGE.jpg" +
+    "&split=train"
+
+	res, _ := http.Post(uploadURL, "application/x-www-form-urlencoded", strings.NewReader(data))
+    body, _ := ioutil.ReadAll(res.Body)
+	fmt.Println(string(body))
+
+}
+```
+
+**Adding an Image Hosted Elsewhere via URL:**
+
+```
+package main
+
+import (
+    "fmt"
+	"net/http"
+	"net/url"
+	"io/ioutil"
+
+)
+
+func main() {
+	api_key := ""  // Your API Key
+	dataset_name := "Your-Dataset" // Set Dataset Name (Found in Dataset URL)
+	img_url := "https://i.imgur.com/PEEvqPN.png"
+
+	uploadURL := "https://api.roboflow.com/dataset/"+ dataset_name + "/upload"+
+    "?api_key=" + api_key +
+    "&name=YOUR_IMAGE.jpg" +
+    "&split=train" + "&image=" + url.QueryEscape(img_url)
+
+	res, _ := http.Post(uploadURL, "application/x-www-form-urlencoded", nil)
+	body, _ := ioutil.ReadAll(res.Body)
+    fmt.Println(string(body))
+
+}
+```
+
+```
+using System;
+using System.IO;
+using System.Net;
+using System.Text;
+
+namespace UploadLocal
+{
+    class UploadLocal
+    {
+
+        static void Main(string[] args)
+        {
+            byte[] imageArray = System.IO.File.ReadAllBytes(@"YOUR_IMAGE.jpg");
+            string encoded = Convert.ToBase64String(imageArray);
+            byte[] data = Encoding.ASCII.GetBytes(encoded);
+            string API_KEY = ""; // Your API Key
+            string DATASET_NAME = "your-dataset"; // Set Dataset Name (Found in Dataset URL)
+
+            // Construct the URL
+            string uploadURL =
+                    "https://api.roboflow.com/dataset/" +
+                            DATASET_NAME + "/upload" +
+                            "?api_key=" + API_KEY +
+                            "&name=YOUR_IMAGE.jpg" +
+                            "&split=train";
+
+            // Service Request Config
+            ServicePointManager.Expect100Continue = true;
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+
+            // Configure Request
+            WebRequest request = WebRequest.Create(uploadURL);
+            request.Method = "POST";
+            request.ContentType = "application/x-www-form-urlencoded";
+            request.ContentLength = data.Length;
+
+            // Write Data
+            using (Stream stream = request.GetRequestStream())
+            {
+                stream.Write(data, 0, data.Length);
+            }
+
+            // Get Response
+            string responseContent = null;
+            using (WebResponse response = request.GetResponse())
+            {
+                using (Stream stream = response.GetResponseStream())
+                {
+                    using (StreamReader sr99 = new StreamReader(stream))
+                    {
+                        responseContent = sr99.ReadToEnd();
+                    }
+                }
+            }
+
+            Console.WriteLine(responseContent);
+
+        }
+    }
+}
+```
+
+**Adding an Image Hosted Elsewhere via URL:**
+
+```
+using System;
+using System.IO;
+using System.Net;
+using System.Web;
+
+namespace UploadHosted
+{
+    class UploadHosted
+    {
+        static void Main(string[] args)
+        {
+            string API_KEY = ""; // Your API Key
+            string DATASET_NAME = "your-dataset"; // Set Dataset Name (Found in Dataset URL)
+            string imageURL = "https://i.imgur.com/PEEvqPN.png";
+            imageURL = HttpUtility.UrlEncode(imageURL);
+
+            // Construct the URL
+            string uploadURL =
+                    "https://api.roboflow.com/dataset/" +
+                            DATASET_NAME + "/upload" +
+                            "?api_key=" + API_KEY +
+                            "&name=YOUR_IMAGE.jpg" +
+                            "&split=train" +
+                            "&image=" + imageURL;
+
+            // Service Point Config
+            ServicePointManager.Expect100Continue = true;
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+
+            // Configure Http Request
+            WebRequest request = WebRequest.Create(uploadURL);
+            request.Method = "POST";
+            request.ContentType = "application/x-www-form-urlencoded";
+            request.ContentLength = 0;
+
+            // Get Response
+            string responseContent = null;
+            using (WebResponse response = request.GetResponse())
+            {
+                using (Stream stream = response.GetResponseStream())
+                {
+                    using (StreamReader sr99 = new StreamReader(stream))
+                    {
+                        responseContent = sr99.ReadToEnd();
+                    }
+                }
+            }
+
+            Console.WriteLine(responseContent);
+
+        }
+    }
+}
+```
+
+Images uploaded via the API can be found in the `Annotate` tab, under the `unassigned` column and marked as `uploaded via API`.
+
+If you specify a `batch` upload parameter, your image will still be found in the `Annotate` tab but instead of going to the `uploaded via API` batch it will be found in the batch you specified.
+
+Was this helpful?
+
+This site uses cookies to deliver its service and to analyze traffic. By browsing this site, you accept the [privacy policy](https://policies.gitbook.com/privacy/cookies).
+
