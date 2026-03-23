@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -54,6 +54,7 @@ except Exception:
 
 CLI_PATH = PROJECT_ROOT / "cli.py"
 REGRESSION_MODULE = "soil_segment.regression_trainer"
+TRAINING_UI_PATH = PROJECT_ROOT / "scripts" / "training_ui.html"
 
 # ---------------------------------------------------------------------------
 # App
@@ -66,6 +67,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/training_ui.html", include_in_schema=False)
+def training_ui():
+    if not TRAINING_UI_PATH.is_file():
+        raise HTTPException(404, f"Training UI not found: {TRAINING_UI_PATH}")
+    return FileResponse(TRAINING_UI_PATH)
 
 # ---------------------------------------------------------------------------
 # Shared training state (single-process, one job at a time)
