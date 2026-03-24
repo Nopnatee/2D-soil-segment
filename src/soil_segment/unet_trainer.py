@@ -33,6 +33,7 @@ CLASS_NAMES = (
     'Yellow_Urea_uncoated',
 )
 N_CLASSES = len(CLASS_NAMES)
+MASK_EXTENSIONS = ('.png', '.jpg', '.jpeg')
 
 
 def get_class_names(n_classes):
@@ -49,6 +50,25 @@ def append_name_suffix(path: Path, suffix: str) -> Path:
     if not suffix:
         return path
     return path.with_name(f"{path.name}{suffix}")
+
+
+def resolve_mask_path(mask_dir, img_name):
+    """Resolve a mask path for an image, including *_mask exports."""
+    base_name = os.path.splitext(img_name)[0]
+    candidates = [img_name]
+    candidates.extend(
+        base_name + ext for ext in MASK_EXTENSIONS if base_name + ext != img_name
+    )
+    candidates.extend(base_name + '_mask' + ext for ext in MASK_EXTENSIONS)
+
+    for candidate in candidates:
+        mask_path = os.path.join(mask_dir, candidate)
+        if os.path.exists(mask_path):
+            return mask_path
+
+    raise FileNotFoundError(
+        f"No mask found for image {img_name} in {mask_dir}"
+    )
 
 # Support running as a script or within the package
 if __package__ is None or __package__ == "":
@@ -150,19 +170,7 @@ class BeadDataset(Dataset):
     def __getitem__(self, idx):
         img_name = self.images[idx]
         img_path = os.path.join(self.image_dir, img_name)
-
-        # Find corresponding mask
-        mask_path = os.path.join(self.mask_dir, img_name)
-        if not os.path.exists(mask_path):
-            base_name = os.path.splitext(img_name)[0]
-            for ext in ['.png', '.jpg', '.jpeg']:
-                mask_path = os.path.join(self.mask_dir, base_name + ext)
-                if os.path.exists(mask_path):
-                    break
-            else:
-                raise FileNotFoundError(
-                    f"No mask found for image {img_name} in {self.mask_dir}"
-                )
+        mask_path = resolve_mask_path(self.mask_dir, img_name)
 
         # Load image and mask
         image = Image.open(img_path).convert('RGB')
@@ -216,18 +224,7 @@ def load_image_mask_pair(dataset, original_idx):
     """Load a raw image/mask pair from the base dataset by absolute index."""
     img_name = dataset.images[original_idx]
     img_path = os.path.join(dataset.image_dir, img_name)
-
-    mask_path = os.path.join(dataset.mask_dir, img_name)
-    if not os.path.exists(mask_path):
-        base_name = os.path.splitext(img_name)[0]
-        for ext in ['.png', '.jpg', '.jpeg']:
-            mask_path = os.path.join(dataset.mask_dir, base_name + ext)
-            if os.path.exists(mask_path):
-                break
-        else:
-            raise FileNotFoundError(
-                f"No mask found for image {img_name} in {dataset.mask_dir}"
-            )
+    mask_path = resolve_mask_path(dataset.mask_dir, img_name)
 
     image = Image.open(img_path).convert('RGB')
     mask = Image.open(mask_path)

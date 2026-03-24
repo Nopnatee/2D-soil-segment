@@ -837,7 +837,7 @@ html, body { height: 100%; background: var(--bg0); color: var(--text0); font-fam
 </div>
 
 <script>
-const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
+const { createApp, ref, shallowRef, computed, watch, onMounted, nextTick } = Vue;
 
 const API = 'http://localhost:8000';
 
@@ -851,8 +851,8 @@ createApp({
     const toasts = ref([]);
     const logBox = ref(null);
 
-    const lossChart = ref(null);
-    const diceChart = ref(null);
+    const lossChart = shallowRef(null);
+    const diceChart = shallowRef(null);
 
     const status = ref({
       running: false, mode: null, fold: null, total_folds: null,
@@ -1019,6 +1019,7 @@ createApp({
 
     async function clearMetrics() {
       await api('DELETE', '/api/train/clear').catch(() => {});
+      prevMetricLen = 0;
       status.value.metrics = [];
       status.value.log = [];
       status.value.error = null;
@@ -1069,17 +1070,33 @@ createApp({
       }
     };
 
+    function metricSeries(metrics, key) {
+      return metrics.map((m) => {
+        const value = Number(m[key]);
+        return Number.isFinite(value) ? value : null;
+      });
+    }
+
     function updateCharts(metrics) {
       if (metrics.length === 0) return;
       const labels = metrics.map(m => m.fold ? `F${m.fold}:${m.epoch}` : `${m.epoch}`);
-      const tl = metrics.map(m => m.train_loss);
-      const vl = metrics.map(m => m.val_loss);
-      const td = metrics.map(m => m.train_dice);
-      const vd = metrics.map(m => m.val_dice);
+      const tl = metricSeries(metrics, 'train_loss');
+      const vl = metricSeries(metrics, 'val_loss');
+      const td = metricSeries(metrics, 'train_dice');
+      const vd = metricSeries(metrics, 'val_dice');
 
       const lEl = document.getElementById('chart-loss');
       const dEl = document.getElementById('chart-dice');
       if (!lEl || !dEl) return;
+
+      if (lossChart.value && lossChart.value.canvas !== lEl) {
+        lossChart.value.destroy();
+        lossChart.value = null;
+      }
+      if (diceChart.value && diceChart.value.canvas !== dEl) {
+        diceChart.value.destroy();
+        diceChart.value = null;
+      }
 
       const lData = {
         labels,
@@ -1099,14 +1116,18 @@ createApp({
       if (!lossChart.value) {
         lossChart.value = new Chart(lEl, { type: 'line', data: lData, options: { ...chartDefaults } });
       } else {
-        lossChart.value.data = lData;
-        lossChart.value.update('none');
+        lossChart.value.data.labels = labels;
+        lossChart.value.data.datasets[0].data = tl;
+        lossChart.value.data.datasets[1].data = vl;
+        lossChart.value.update();
       }
       if (!diceChart.value) {
         diceChart.value = new Chart(dEl, { type: 'line', data: dData, options: { ...chartDefaults } });
       } else {
-        diceChart.value.data = dData;
-        diceChart.value.update('none');
+        diceChart.value.data.labels = labels;
+        diceChart.value.data.datasets[0].data = td;
+        diceChart.value.data.datasets[1].data = vd;
+        diceChart.value.update();
       }
     }
 
@@ -1128,7 +1149,11 @@ createApp({
 
     // re-draw when switching to progress tab
     watch(tab, async (t) => {
-      if (t === 'progress' && status.value.metrics.length > 0) {
+      if (t !== 'progress') {
+        destroyCharts();
+        return;
+      }
+      if (status.value.metrics.length > 0) {
         await nextTick();
         updateCharts(status.value.metrics);
       }
