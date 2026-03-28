@@ -478,10 +478,12 @@ html, body { height: 100%; background: var(--bg0); color: var(--text0); font-fam
               <div>
                 <div class="ds-name">{{ ds.label }}</div>
                 <div style="font-size:11px;color:var(--text2);margin-top:2px;font-family:var(--font-mono);">{{ ds.base }}</div>
+                <div v-if="ds.note" style="font-size:11px;color:var(--accent2);margin-top:4px;">{{ ds.note }}</div>
               </div>
               <div class="ds-counts">
+                <span v-if="ds.kind === 'regression'" class="ds-count">folders: <span>{{ ds.formulas }}</span></span>
                 <span class="ds-count">images: <span>{{ ds.images }}</span></span>
-                <span class="ds-count">masks: <span>{{ ds.masks }}</span></span>
+                <span v-if="ds.kind !== 'regression'" class="ds-count">masks: <span>{{ ds.masks }}</span></span>
                 <span class="ds-exists-badge" :class="ds.exists ? 'yes' : 'no'">{{ ds.exists ? 'found' : 'missing' }}</span>
               </div>
             </div>

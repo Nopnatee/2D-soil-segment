@@ -74,10 +74,10 @@ def resolve_mask_path(mask_dir, img_name):
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     from soil_segment.custom_unet import SimpleUNet, ConvBlock
-    from soil_segment.config import get_data_paths
+    from soil_segment.config import get_data_paths, resolve_unet_dataset_path
 else:
     from .custom_unet import SimpleUNet, ConvBlock
-    from .config import get_data_paths
+    from .config import get_data_paths, resolve_unet_dataset_path
 
 
 # ============================================================================
@@ -1435,7 +1435,10 @@ def main(argv=None):
     
     # Get paths
     paths = get_data_paths()
-    default_dataset = append_name_suffix(Path(paths["unet_dataset"]), suffix)
+    default_dataset = resolve_unet_dataset_path(
+        Path(paths["unet_dataset"]),
+        uncoated=args.uncoated,
+    )
     default_checkpoints = append_name_suffix(Path(paths["checkpoints"]), suffix)
 
     dataset_dir = str((args.dataset or default_dataset).expanduser().resolve())

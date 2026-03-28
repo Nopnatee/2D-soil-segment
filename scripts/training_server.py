@@ -43,7 +43,11 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 try:
-    from soil_segment.config import get_data_paths  # type: ignore
+    from soil_segment.config import (  # type: ignore
+        get_data_paths,
+        resolve_regression_dataset_selection,
+        resolve_unet_dataset_path,
+    )
     _PATHS = get_data_paths()
 except Exception:
     _PATHS = {
@@ -51,6 +55,24 @@ except Exception:
         "regression_dataset": PROJECT_ROOT / "datasets" / "regression_dataset",
         "checkpoints": PROJECT_ROOT / "checkpoints",
     }
+
+    def resolve_unet_dataset_path(base_path: Path, *, uncoated: bool = False) -> Path:
+        return Path(str(base_path) + ("_uncoated" if uncoated else ""))
+
+    class _RegressionSelection:
+        def __init__(self, path: Path, uncoated_only: bool = False):
+            self.path = path
+            self.uncoated_only = uncoated_only
+
+    def resolve_regression_dataset_selection(
+        base_path: Path,
+        *,
+        uncoated: bool = False,
+    ) -> _RegressionSelection:
+        return _RegressionSelection(
+            Path(str(base_path) + ("_uncoated" if uncoated else "")),
+            False,
+        )
 
 CLI_PATH = PROJECT_ROOT / "cli.py"
 REGRESSION_MODULE = "soil_segment.regression_trainer"
@@ -247,22 +269,93 @@ def _count_dir(path: Path) -> int:
     return sum(1 for f in path.iterdir() if f.is_file())
 
 
+def _count_image_like_files(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    return sum(
+        1
+        for child in path.iterdir()
+        if child.is_file() and child.suffix.lower() in {
+            ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"
+        }
+    )
+
+
+def _count_regression_items(base: Path, *, uncoated_only: bool = False) -> tuple[int, int]:
+    if not base.is_dir():
+        return 0, 0
+
+    formulas = 0
+    images = 0
+    for child in sorted(base.iterdir()):
+        if not child.is_dir():
+            continue
+        if uncoated_only and "uncoated" not in child.name.lower():
+            continue
+
+        images_dir = child / "images" if (child / "images").is_dir() else child
+        image_count = _count_image_like_files(images_dir)
+        if image_count:
+            formulas += 1
+            images += image_count
+    return formulas, images
+
+
 @app.get("/api/dataset/info")
 def dataset_info():
     """Return file counts for all dataset directories."""
-    def _info(base: Path):
+    def _seg_info(base: Path, note: Optional[str] = None):
         return {
+            "kind": "segmentation",
             "base": str(base),
             "images": _count_dir(base / "images"),
             "masks": _count_dir(base / "masks"),
             "exists": base.exists(),
+            "note": note,
         }
 
+    def _reg_info(base: Path, *, uncoated_only: bool = False):
+        formulas, images = _count_regression_items(base, uncoated_only=uncoated_only)
+        note = (
+            "Using only *uncoated* formula folders inside this dataset root."
+            if uncoated_only else None
+        )
+        return {
+            "kind": "regression",
+            "base": str(base),
+            "images": images,
+            "formulas": formulas,
+            "exists": base.exists() and formulas > 0,
+            "note": note,
+        }
+
+    unet_base = Path(_PATHS["unet_dataset"])
+    unet_uncoated_base = resolve_unet_dataset_path(unet_base, uncoated=True)
+    reg_base = resolve_regression_dataset_selection(
+        Path(_PATHS["regression_dataset"]),
+        uncoated=False,
+    )
+    reg_uncoated = resolve_regression_dataset_selection(
+        Path(_PATHS["regression_dataset"]),
+        uncoated=True,
+    )
+
     return {
-        "unet": _info(Path(_PATHS["unet_dataset"])),
-        "unet_uncoated": _info(Path(str(_PATHS["unet_dataset"]) + "_uncoated")),
-        "regression": _info(Path(_PATHS["regression_dataset"])),
-        "regression_uncoated": _info(Path(str(_PATHS["regression_dataset"]) + "_uncoated")),
+        "unet": _seg_info(unet_base),
+        "unet_uncoated": _seg_info(
+            unet_uncoated_base,
+            note=(
+                "Auto-detected uncoated dataset directory."
+                if unet_uncoated_base != Path(str(unet_base) + "_uncoated")
+                and unet_uncoated_base.exists()
+                else None
+            ),
+        ),
+        "regression": _reg_info(reg_base.path, uncoated_only=reg_base.uncoated_only),
+        "regression_uncoated": _reg_info(
+            reg_uncoated.path,
+            uncoated_only=reg_uncoated.uncoated_only,
+        ),
         "checkpoints": {
             "base": str(_PATHS["checkpoints"]),
             "files": [
